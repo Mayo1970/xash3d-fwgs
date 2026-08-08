@@ -1,0 +1,26 @@
+/*
+ * q3_fp_blend.fcg -- Fragment program: GL_BLEND texenv
+ *
+ * PS3GL_TENV_BLEND: output.rgb = lerp(color.rgb, envcolor.rgb, tex.rgb)
+ *                   output.a   = color.a * tex.a
+ *
+ * Since Q3 rarely uses GL_BLEND texenv and we don't track envcolor,
+ * this approximation uses white as envcolor (= inverse modulate).
+ *
+ * Compiled with: cgcomp -f q3_fp_blend.fcg q3_fp_blend.fpo
+ */
+
+void main(
+    float4 color : COLOR0,
+    float2 tc0   : TEXCOORD0,
+
+    uniform sampler2D tex0,
+
+    out float4 oColor : COLOR
+)
+{
+    float4 tex = tex2D(tex0, tc0);
+    /* envcolor = white(1,1,1) -> lerp(color, 1, tex) = color*(1-tex) + tex */
+    oColor.rgb = color.rgb * (1.0 - tex.rgb) + tex.rgb;
+    oColor.a   = color.a * tex.a;
+}

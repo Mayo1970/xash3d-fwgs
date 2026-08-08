@@ -1,0 +1,48 @@
+/*
+ * q3_vp.vcg -- Quake 3 vertex program for PS3 RSX.
+ *
+ * Transforms position by MVP matrix and passes through texcoords + color.
+ * Compiled with: cgcomp -v q3_vp.vcg q3_vp.vpo
+ *
+ * Inputs:
+ *   ATTR0 (position)  : float4  -- object-space position (= world-space for BSP)
+ *   ATTR3 (color0)    : float4  -- vertex color (RGBA normalized)
+ *   ATTR8 (texcoord0) : float2  -- texture coordinate 0
+ *   ATTR9 (texcoord1) : float2  -- texture coordinate 1
+ *
+ * Uniforms:
+ *   mvp        : float4x4 -- model-view-projection matrix
+ *   clip_plane : float4   -- world-space clip plane (nx,ny,nz,dist)
+ *                            dot(normal, world_pos) >= dist keeps vertex
+ *
+ * Outputs:
+ *   POSITION  : clip-space position
+ *   COLOR0    : vertex color (pass-through)
+ *   TEXCOORD0 : texcoord 0 (pass-through)
+ *   TEXCOORD1 : texcoord 1 (pass-through)
+ *   CLP0      : clip distance for GL_CLIP_PLANE0 (hardware clipping)
+ */
+
+void main(
+    float4 position : ATTR0,
+    float4 color    : ATTR3,
+    float2 tc0      : ATTR8,
+    float2 tc1      : ATTR9,
+
+    uniform float4x4 mvp,
+    uniform float4   clip_plane,
+
+    out float4 oPosition : POSITION,
+    out float4 oColor    : COLOR0,
+    out float2 oTc0      : TEXCOORD0,
+    out float2 oTc1      : TEXCOORD1,
+    out float  oClip0    : CLP0
+)
+{
+    oPosition = mul(mvp, position);
+    oColor    = color;
+    oTc0      = tc0;
+    oTc1      = tc1;
+    /* World-space clip: dot(normal, pos.xyz) - dist >= 0 keeps the vertex */
+    oClip0    = dot(clip_plane.xyz, position.xyz) - clip_plane.w;
+}

@@ -1,0 +1,5 @@
+env_warpball
+item_armorvest
+item_helmet
+monster_rosenberg
+trigger_playerfreeze

@@ -1,0 +1,17 @@
+/*
+ * q3_fp_coloronly.fcg -- Fragment program: vertex color only
+ *
+ * PS3GL_TENV_DISABLED: output = vertexColor
+ * Used when no texture is bound (e.g., wireframe, debug drawing).
+ *
+ * Compiled with: cgcomp -f q3_fp_coloronly.fcg q3_fp_coloronly.fpo
+ */
+
+void main(
+    float4 color : COLOR0,
+
+    out float4 oColor : COLOR
+)
+{
+    oColor = color;
+}

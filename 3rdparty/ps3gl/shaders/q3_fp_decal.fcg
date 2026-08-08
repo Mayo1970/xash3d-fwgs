@@ -1,0 +1,22 @@
+/*
+ * q3_fp_decal.fcg -- Fragment program: decal blend
+ *
+ * PS3GL_TENV_DECAL: output = lerp(color, tex.rgb, tex.a), alpha = color.a
+ * Standard GL_DECAL texenv behavior.
+ *
+ * Compiled with: cgcomp -f q3_fp_decal.fcg q3_fp_decal.fpo
+ */
+
+void main(
+    float4 color : COLOR0,
+    float2 tc0   : TEXCOORD0,
+
+    uniform sampler2D tex0,
+
+    out float4 oColor : COLOR
+)
+{
+    float4 tex = tex2D(tex0, tc0);
+    oColor.rgb = lerp(color.rgb, tex.rgb, tex.a);
+    oColor.a   = color.a;
+}

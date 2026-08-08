@@ -1,0 +1,18 @@
+[submodule "mainui"]
+	path = 3rdparty/mainui
+	url = https://github.com/FWGS/mainui_cpp
+[submodule "opus"]
+	path = 3rdparty/opus/opus
+	url = https://github.com/xiph/opus
+[submodule "3rdparty/bzip2/bzip2"]
+	path = 3rdparty/bzip2/bzip2
+	url = https://gitlab.com/bzip2/bzip2
+[submodule "3rdparty/MultiEmulator"]
+	path = 3rdparty/MultiEmulator
+	url = https://github.com/FWGS/MultiEmulator
+[submodule "3rdparty/opusfile/opusfile"]
+	path = 3rdparty/opusfile/opusfile
+	url = https://github.com/xiph/opusfile.git
+[submodule "3rdparty/library_suffix"]
+	path = 3rdparty/library_suffix
+	url = https://github.com/FWGS/library-suffix.git

@@ -1,0 +1,111 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	libs = ['vcs_info', 'werror', 'yy_thunks']
+	defines = [
+		'CLIENT_DLL',
+		'CLIENT_WEAPONS',
+		'CROWBAR_FIX_RAPID_CROWBAR',
+		'SPEAKABLE_TARGETS',
+	]
+
+	# per-flavor game code (e.g. BSHIFT), see PS3_GAME_DEFINES in the root wscript
+	defines += bld.env.GAME_DEFINES
+
+	includes = ['.',
+		'../dlls',
+		'../common',
+		'../engine',
+		'../pm_shared',
+		'../game_shared',
+		'../public',
+		'../utils/fake_vgui/include']
+
+	# VGUI1 and GoldSource compat (dlopen-based SDL2 joystick shim in
+	# input_goldsource.cpp) are both unsupported on PS3 -- no dlopen,
+	# no VGUI port. Exclude their sources instead of relying on define
+	# gating alone, since input_goldsource.cpp compiles the dlopen call
+	# site regardless of GOLDSOURCE_SUPPORT.
+	excluded_files = [
+		'GameStudioModelRenderer_Sample.cpp',
+		'game_shared/voice_vgui_tweakdlg.cpp',
+		'game_shared/voice_gamemgr.cpp',
+		'game_shared/voice_status.cpp',
+		'voice_status.cpp',
+		'vgui_*.cpp',
+		'game_shared/vgui_*.cpp',
+		'game_shared/voice_banmgr.cpp',
+		'input_goldsource.cpp',
+	]
+
+	# Opposing Force client code (the nightvision HUD here, the predicted
+	# gearbox weapons from ../dlls/gearbox below). Excluded outright for every
+	# other flavor rather than #ifdef'd -- see the same block in dlls/wscript
+	# and OPFOR in PS3_GAME_DEFINES in the root wscript.
+	opfor = bld.env.PS3_GAME == 'gearbox'
+
+	if not opfor:
+		excluded_files += ['gearbox/*.cpp']
+
+	source = bld.path.ant_glob('**/*.cpp', excl=excluded_files)
+	source += bld.path.parent.ant_glob('game_shared/*.cpp', excl=excluded_files)
+	source += bld.path.parent.ant_glob([
+		'public/safe_snprintf.c',
+		'pm_shared/*.c',
+		'dlls/crossbow.cpp',
+		'dlls/crowbar.cpp',
+		'dlls/egon.cpp',
+		'dlls/gauss.cpp',
+		'dlls/glock.cpp',
+		'dlls/handgrenade.cpp',
+		'dlls/hornetgun.cpp',
+		'dlls/mp5.cpp',
+		'dlls/python.cpp',
+		'dlls/rpg.cpp',
+		'dlls/satchel.cpp',
+		'dlls/shotgun.cpp',
+		'dlls/squeakgrenade.cpp',
+		'dlls/tripmine.cpp'
+	])
+
+	# CLIENT_WEAPONS prediction needs each weapon's server-side implementation
+	# compiled into the client too, exactly like the base HL list above.
+	if opfor:
+		includes.insert(2, '../dlls/gearbox')
+		source += bld.path.parent.ant_glob([
+			'dlls/gearbox/displacer.cpp',
+			'dlls/gearbox/eagle.cpp',
+			'dlls/gearbox/grapple.cpp',
+			'dlls/gearbox/knife.cpp',
+			'dlls/gearbox/m249.cpp',
+			'dlls/gearbox/penguin.cpp',
+			'dlls/gearbox/pipewrench.cpp',
+			'dlls/gearbox/shockrifle.cpp',
+			'dlls/gearbox/sniperrifle.cpp',
+			'dlls/gearbox/sporelauncher.cpp'
+		])
+
+	if not bld.env.HAVE_STRLCPY:
+		source += bld.path.parent.ant_glob('external/openbsd/strlcpy.c')
+
+	if not bld.env.HAVE_STRLCAT:
+		source += bld.path.parent.ant_glob('external/openbsd/strlcat.c')
+
+	bld.shlib(
+		source   = source,
+		target   = 'client',
+		name     = 'client',
+		features = 'c cxx',
+		includes = includes,
+		defines  = defines,
+		use      = libs,
+		install_path = None,
+		idx = bld.get_taskgen_count()
+	)

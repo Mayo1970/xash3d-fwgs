@@ -1,0 +1,20 @@
+/*
+ * q3_fp_modulate.fcg -- Fragment program: color * texture0
+ *
+ * PS3GL_TENV_MODULATE: output = vertexColor * tex2D(tex0, tc0)
+ * This is the most common mode in Quake 3.
+ *
+ * Compiled with: cgcomp -f q3_fp_modulate.fcg q3_fp_modulate.fpo
+ */
+
+void main(
+    float4 color : COLOR0,
+    float2 tc0   : TEXCOORD0,
+
+    uniform sampler2D tex0,
+
+    out float4 oColor : COLOR
+)
+{
+    oColor = color * tex2D(tex0, tc0);
+}

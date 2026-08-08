@@ -1,0 +1,204 @@
+# CI setup based on https://gitlab.gnome.org/GNOME/librsvg/blob/master/.gitlab-ci.yml
+
+variables:
+  AMD64_DEBIAN_TESTING: debian:testing
+  AMD64_UBUNTU_BIONIC: ubuntu:bionic
+  AMD64_FEDORA_LATEST: "registry.fedoraproject.org/fedora:35"
+  AMD64_FEDORA_RAWHIDE: "registry.fedoraproject.org/fedora:rawhide"
+  AMD64_OPENSUSE_LEAP: opensuse/leap
+  AMD64_OPENSUSE_TUMBLEWEED: opensuse/tumbleweed
+
+  I386_UBUNTU_BIONIC: "i386/ubuntu:bionic"
+
+  GIT_SUBMODULE_STRATEGY: recursive
+
+stages:
+  - test
+
+.meson_test:
+  stage: test
+  script:
+    - meson builddir
+    - ninja -C builddir
+    - meson test -C builddir --print-errorlogs
+  after_script:
+    - cp builddir/meson-logs/meson-log.txt .
+    - rm -rf builddir
+  artifacts:
+    paths:
+      - "meson-log.txt"
+
+.cmake_test_debug:
+  stage: test
+  script:
+    - mkdir builddir && cd builddir
+    - cmake .. -DCMAKE_BUILD_TYPE="Debug" -D ENABLE_SHARED_LIB=ON -D ENABLE_STATIC_LIB=OFF
+    - cmake --build .
+    - make check
+  after_script:
+    - cp builddir/CMakeFiles/CMakeOutput.log .
+    - rm -rf builddir
+  artifacts:
+    paths:
+      - "CMakeOutput.log"
+
+.cmake_test:
+  stage: test
+  script:
+    - mkdir builddir && cd builddir
+    - cmake .. -DCMAKE_BUILD_TYPE="Release" -D ENABLE_SHARED_LIB=ON -D ENABLE_STATIC_LIB=OFF
+    - cmake --build .
+    - make check
+  after_script:
+    - cp builddir/CMakeFiles/CMakeOutput.log .
+    - rm -rf builddir
+  artifacts:
+    paths:
+      - "CMakeOutput.log"
+
+.cmake_test_shared_static:
+  stage: test
+  script:
+    - mkdir builddir && cd builddir
+    - cmake .. -DCMAKE_BUILD_TYPE="Release" -D ENABLE_SHARED_LIB=ON -D ENABLE_STATIC_LIB=ON
+    - cmake --build .
+    - make check
+  after_script:
+    - cp builddir/CMakeFiles/CMakeOutput.log .
+    - rm -rf builddir
+  artifacts:
+    paths:
+      - "CMakeOutput.log"
+
+.cmake_test_static_only:
+  stage: test
+  script:
+    - mkdir builddir && cd builddir
+    - cmake .. -DCMAKE_BUILD_TYPE="Release" -D ENABLE_SHARED_LIB=OFF -D ENABLE_STATIC_LIB=ON
+    - cmake --build .
+    - make check
+  after_script:
+    - cp builddir/CMakeFiles/CMakeOutput.log .
+    - rm -rf builddir
+  artifacts:
+    paths:
+      - "CMakeOutput.log"
+
+debian:testing:meson:
+  extends: ".meson_test"
+  image: $AMD64_DEBIAN_TESTING
+  before_script:
+    - apt-get update -y
+    - apt-get install -y gcc meson python3-distutils python3-pytest valgrind
+
+debian:testing:cmake:debug:
+  extends: ".cmake_test_debug"
+  image: $AMD64_DEBIAN_TESTING
+  before_script:
+    - apt-get update -y
+    - apt-get install -y gcc make python3-pytest cmake valgrind
+
+debian:testing:cmake:
+  extends: ".cmake_test"
+  image: $AMD64_DEBIAN_TESTING
+  before_script:
+    - apt-get update -y
+    - apt-get install -y gcc make python3-pytest cmake valgrind
+
+debian:testing:cmake:shared_static:
+  extends: ".cmake_test_shared_static"
+  image: $AMD64_DEBIAN_TESTING
+  before_script:
+    - apt-get update -y
+    - apt-get install -y gcc make python3-pytest cmake valgrind
+
+debian:testing:cmake:static_only:
+  extends: ".cmake_test_static_only"
+  image: $AMD64_DEBIAN_TESTING
+  before_script:
+    - apt-get update -y
+    - apt-get install -y gcc make python3-pytest cmake valgrind
+
+ubuntu:bionic:meson:
+  extends: ".meson_test"
+  image: $AMD64_UBUNTU_BIONIC
+  before_script:
+    - apt-get update -y
+    - apt-get install -y gcc python3-pip ninja-build valgrind
+    - pip3 install meson pytest
+
+ubuntu:bionic:cmake:
+  extends: ".cmake_test"
+  image: $AMD64_UBUNTU_BIONIC
+  before_script:
+    - apt-get update -y
+    - apt-get install -y gcc make python3-pip valgrind
+    - pip3 install --upgrade pip
+    - pip3 install pytest cmake
+
+ubuntu:bionic:i386:meson:
+  extends: ".meson_test"
+  image: $I386_UBUNTU_BIONIC
+  before_script:
+    - apt-get update -y
+    - apt-get install -y gcc python3-pip ninja-build valgrind
+    - pip3 install meson pytest
+
+ubuntu:bionic:i386:cmake:
+  extends: ".cmake_test"
+  image: $I386_UBUNTU_BIONIC
+  before_script:
+    - apt-get update -y
+    - apt-get install -y gcc make python3-pip valgrind
+    - pip3 install --upgrade pip
+    - pip3 install pytest cmake
+
+fedora:30:meson:
+  extends: ".meson_test"
+  image: $AMD64_FEDORA_LATEST
+  before_script:
+    - dnf install -y gcc meson python3-pytest valgrind
+
+fedora:30:cmake:
+  extends: ".cmake_test"
+  image: $AMD64_FEDORA_LATEST
+  before_script:
+    - dnf install -y gcc cmake python3-pytest valgrind
+
+fedora:rawhide:meson:
+  extends: ".meson_test"
+  image: $AMD64_FEDORA_RAWHIDE
+  before_script:
+    - dnf install -y gcc meson python3-pytest valgrind
+
+fedora:rawhide:cmake:
+  extends: ".cmake_test"
+  image: $AMD64_FEDORA_RAWHIDE
+  before_script:
+    - dnf install -y gcc cmake python3-pytest valgrind
+
+opensuse/leap:meson:
+  extends: ".meson_test"
+  image: $AMD64_OPENSUSE_LEAP
+  before_script:
+    - zypper install -y gcc ninja python3-pip valgrind
+    - pip3 install meson pytest
+
+opensuse/leap:cmake:
+  extends: ".cmake_test"
+  image: $AMD64_OPENSUSE_LEAP
+  before_script:
+    - zypper install -y gcc cmake python3-pip valgrind
+    - pip3 install pytest
+
+opensuse/tumbleweed:meson:
+  extends: ".meson_test"
+  image: $AMD64_OPENSUSE_TUMBLEWEED
+  before_script:
+    - zypper install -y gcc meson python3-pytest valgrind
+
+opensuse/tumbleweed:cmake:
+  extends: ".cmake_test"
+  image: $AMD64_OPENSUSE_TUMBLEWEED
+  before_script:
+    - zypper install -y gcc cmake python3-pytest valgrind

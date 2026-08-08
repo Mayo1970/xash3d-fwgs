@@ -1,0 +1,28 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+# ps3gl -- OpenGL 1.1 fixed-function subset backed by the RSX via PSL1GHT's gcm
+# API. Ported from the sibling ioQuake3-PS3 port (code/gl/), which validated it
+# on real hardware. ref_gl calls into it directly under XASH_GL_STATIC, the same
+# shape PSVita uses with vitaGL -- but the stlib itself is linked into the
+# ENGINE, not ref_gl, because vid_ps3.c owns the gcm context and must call
+# ps3gl_init/begin_frame/end_frame across the --static-linking objcopy boundary.
+# See engine/wscript for the full reasoning.
+#
+# Shaders are compiled OFFLINE with cgcomp (PSL1GHT has no runtime shader
+# compiler) and checked in as .vpo/.fpo, embedded via the generated
+# ps3gl_shader_data.h. Regenerate with shaders/compile_shaders.sh only when a
+# .vcg/.fcg source actually changes -- the build itself needs no cgcomp step.
+
+def options(opt):
+	pass
+
+def configure(conf):
+	pass
+
+def build(bld):
+	bld.stlib(source   = bld.path.ant_glob('*.c'),
+		target   = 'ps3gl',
+		includes = ['.', 'include'],
+		export_includes = ['.', 'include'],
+		use      = 'werror')

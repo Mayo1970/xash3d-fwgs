@@ -1,0 +1,82 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	excluded_files = ['mpstubb.cpp', 'stats.cpp', 'Wxdebug.cpp']
+
+	# Opposing Force's game code lives in gearbox/ (the directory the mod ships
+	# under). One vendored hlsdk tree serves every flavor and the source list is
+	# a recursive glob, so gearbox/ must be excluded outright for every other
+	# flavor -- #ifdef'ing the file bodies would still compile 56 translation
+	# units of gearbox entities into the valve and bshift links. See OPFOR in
+	# PS3_GAME_DEFINES in the root wscript.
+	opfor = bld.env.PS3_GAME == 'gearbox'
+
+	if not opfor:
+		excluded_files += ['gearbox/*.cpp']
+
+	source = bld.path.ant_glob('**/*.cpp', excl=excluded_files)
+	source += bld.path.parent.ant_glob(['pm_shared/*.c', 'public/safe_snprintf.c'])
+
+	defines = [
+		'CLIENT_WEAPONS',
+		'CROWBAR_FIX_RAPID_CROWBAR',
+		'SPEAKABLE_TARGETS',
+		'NO_VOICEGAMEMGR',
+	]
+
+	# per-flavor game code (e.g. BSHIFT), see PS3_GAME_DEFINES in the root wscript
+	defines += bld.env.GAME_DEFINES
+
+	if not bld.env.HAVE_STRLCPY:
+		source += bld.path.parent.ant_glob('external/openbsd/strlcpy.c')
+
+	if not bld.env.HAVE_STRLCAT:
+		source += bld.path.parent.ant_glob('external/openbsd/strlcat.c')
+
+	includes = [
+		'.',
+		'../common',
+		'../engine',
+		'../pm_shared',
+		'../game_shared',
+		'../public'
+	]
+
+	if opfor:
+		includes.insert(1, 'gearbox')
+
+	cflags = []
+
+	# PPC64 ELFv1 addresses globals through a single 64KB .toc; the Opposing
+	# Force flavor's extra ~57 entity translation units push the final link
+	# past that ("relocation truncated to fit: R_PPC64_TOC16_DS"). ld's own
+	# multi-TOC splitting cannot help here because xshlib.py merges the whole
+	# module into one relocatable object first, so the linker sees a single
+	# input file and therefore a single TOC group. -mminimal-toc moves each
+	# translation unit's constant pool behind one TOC entry of its own, at
+	# the cost of one extra indirection per reference. Scoped to the flavor
+	# that actually overflows: valve and bshift still fit, and their builds
+	# are hardware-validated -- don't change their codegen for free.
+	if bld.env.DEST_OS == 'ps3' and opfor:
+		cflags += ['-mminimal-toc']
+
+	bld.shlib(
+		source   = source,
+		target   = 'server',
+		name     = 'server',
+		features = 'c cxx',
+		includes = includes,
+		defines  = defines,
+		cflags   = cflags,
+		cxxflags = cflags,
+		use      = ['vcs_info', 'werror', 'yy_thunks'],
+		install_path = None,
+		idx = bld.get_taskgen_count()
+	)

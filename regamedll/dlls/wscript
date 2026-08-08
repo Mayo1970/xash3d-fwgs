@@ -1,0 +1,171 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	# The whole source set, matching regamedll/CMakeLists.txt's explicit lists
+	# exactly. A recursive glob is safe here (unlike cs16-client/cl_dll, where
+	# whole directories are dead code): every .cpp on disk that upstream does
+	# not build was deleted when this tree was vendored, so glob == CMake list,
+	# 156 translation units. The two CMake entries not present are
+	# public/tier0/assert_dialog.cpp and platform_win32.cpp, which upstream
+	# also builds only for MSVC.
+	source = bld.path.ant_glob('**/*.cpp')
+	source += bld.path.parent.ant_glob([
+		'game_shared/**/*.cpp',
+		'pm_shared/*.cpp',
+		'regamedll/*.cpp',
+		'public/*.cpp',
+		'public/tier0/*.cpp',
+		'engine/*.cpp',
+	])
+
+	# regamedll/CMakeLists.txt's target_compile_definitions, minus the MSVC
+	# half. LINUX/_LINUX gate the POSIX branches of Valve-era code and are not
+	# a claim about the OS -- same reason cs16-client/cl_dll defines them.
+	# _GLIBCXX_USE_CXX11_ABI=0 is deliberately NOT carried over: it exists
+	# upstream for binary compatibility with old glibc distros, and forcing the
+	# pre-C++11 std::string ABI here would disagree with every other C++ module
+	# in this binary, which all use the toolchain default.
+	defines = [
+		'REGAMEDLL_FIXES',
+		'REGAMEDLL_API',
+		'REGAMEDLL_ADD',
+		'UNICODE_FIXES',
+		'BUILD_LATEST',
+		'CLIENT_WEAPONS',
+		'USE_QSTRING',
+		'NDEBUG',
+		'LINUX',
+		'_LINUX',
+		'_stricmp=strcasecmp',
+		'_strnicmp=strncasecmp',
+		'_strdup=strdup',
+		'_unlink=unlink',
+		'_snprintf=snprintf',
+		'_vsnprintf=vsnprintf',
+		'_write=write',
+		'_close=close',
+		'_access=access',
+		'_vsnwprintf=vswprintf',
+	]
+
+	# XASH_64BIT is load-bearing and easy to miss. dlls/qstring.h selects the
+	# game's string_t representation with #if XASH_64BIT: the 64-bit arm uses a
+	# signed int offset plus the engine's string pool (MAKE_STRING via
+	# ptrdiff_t), the 32-bit arm casts pointers straight to `unsigned int`. That
+	# macro is only ever defined by public/build.h -- which nothing in this SDK
+	# includes, so it is undefined and the 32-bit arm would be chosen on a
+	# platform where sizeof(void*) == 8, truncating every classname/targetname
+	# pointer and turning any negative pool offset into a ~4GB one. Upstream
+	# does exactly this define when XASH_COMPAT is on and pointers are 8 bytes
+	# (regamedll/CMakeLists.txt); cs16-client sets XASH_COMPAT ON.
+	if bld.env.DEST_CPU in ('powerpc64', 'x86_64', 'aarch64') or bld.env.DEST_OS == 'ps3':
+		defines += ['XASH_64BIT=1']
+
+	# No PS3_GAME_DEFINES entry is consumed here, for the same reason
+	# cs16-client/cl_dll consumes none: Counter-Strike swaps this whole source
+	# tree in instead of gating hlsdk-portable's, so a game define has nothing
+	# to select. See the CSTRIKE comment above PS3_GAME_DEFINES in the root
+	# wscript.
+
+	includes = [
+		'.',
+		'..',
+		'../common',
+		'../engine',
+		'../game_shared',
+		'../pm_shared',
+		'../regamedll',
+		'../public',
+		'../public/regamedll',
+	]
+
+	# Upstream's own GCC flag set (regamedll/CMakeLists.txt), minus the x86-only
+	# parts: -msse3/-mtune=generic are skipped, and REGAMEDLL_SSE is left
+	# undefined, so engine/osconfig.h never defines HAVE_SSE and
+	# regamedll/sse_mathfun.cpp compiles to nothing. -fno-sized-deallocation
+	# matters: entities override operator new/delete to allocate through the
+	# engine (ALLOC_PRIVATE), and C++14's sized deallocation would otherwise
+	# route deletes to an overload they do not implement. -fno-devirtualize
+	# keeps virtual dispatch real, which the ReGameDLL API's hookchains assume.
+	common_flags = [
+		'-fno-exceptions',
+		'-fno-builtin',
+		'-fno-sized-deallocation',
+		'-fno-devirtualize',
+		'-fpermissive',
+	]
+
+	# -fno-strict-aliasing is not a warning silencer: this tree type-puns floats
+	# through int lvalues in the GoldSrc idiom, which GCC is entitled to
+	# miscompile at -O2 under strict aliasing.
+	common_flags += ['-fno-strict-aliasing']
+
+	# -fno-rtti is required, not a size tweak. xshlib.py localizes every symbol
+	# in this module except lib_server_exports, and localizing a symbol that
+	# lives in a COMDAT group makes ld discard the group while references to it
+	# survive ("typeinfo for ... defined in discarded section"). Keeping them
+	# global instead would re-expose the C++ vtable/ODR collapse goal 10 fought,
+	# since CBasePlayerWeapon's typeinfo also exists in the cs16-client client
+	# module. Nothing here uses exceptions or typeid; the tree's single
+	# dynamic_cast was replaced with the SDK's own virtual-downcast idiom
+	# (MyItemPointer, see dlls/cbase.h).
+	common_flags += ['-fno-rtti']
+
+	# The warning set upstream turns off for GCC. This module deliberately does
+	# NOT use the shared 'werror' uselib: waf emits a taskgen's own flags before
+	# a uselib's, so -Wno-* here could never override -Werror=write-strings et
+	# al, and 156 translation units of vendored Valve-era code do trip them.
+	common_flags += [
+		'-Wno-delete-non-virtual-dtor',
+		'-Wno-invalid-offsetof',
+		'-Wno-unused-variable',
+		'-Wno-unused-value',
+		'-Wno-unused-result',
+		'-Wno-unused-function',
+		'-Wno-unused-local-typedefs',
+		'-Wno-unused-but-set-variable',
+		'-Wno-write-strings',
+		'-Wno-switch',
+		'-Wno-enum-compare',
+		'-Wno-sign-compare',
+		'-Wno-format',
+		'-Wno-ignored-attributes',
+		'-Wno-strict-aliasing',
+		'-Wno-unknown-pragmas',
+	]
+
+	cxxflags = ['-std=gnu++14'] + common_flags
+	cflags = list(common_flags)
+
+	# PPC64 ELFv1 addresses globals through a single 64KB .toc, and xshlib.py
+	# merges this whole module into one relocatable object before the final
+	# link, so ld's multi-TOC splitting never gets a chance. The Opposing Force
+	# server overflowed that limit at ~57 extra translation units; this server
+	# is 156 against base HL1's 41, so it is over the line by construction.
+	if bld.env.DEST_OS == 'ps3':
+		cflags += ['-mminimal-toc']
+		cxxflags += ['-mminimal-toc']
+
+	bld.shlib(
+		source   = source,
+		target   = 'server',
+		name     = 'server',
+		features = 'c cxx',
+		includes = includes,
+		defines  = defines,
+		cflags   = cflags,
+		cxxflags = cxxflags,
+		use      = ['vcs_info', 'yy_thunks'],
+		install_path = None,
+		# a build-wide counter, not the per-path default: this module and
+		# cs16-client/cl_dll compile same-named shared weapon sources from two
+		# taskgen paths, which is the goal-10 object-filename collision.
+		idx = bld.get_taskgen_count()
+	)

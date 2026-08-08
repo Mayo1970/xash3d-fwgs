@@ -1,0 +1,19 @@
+/*
+ * q3_fp_replace.fcg -- Fragment program: texture0 only
+ *
+ * PS3GL_TENV_REPLACE: output = tex2D(tex0, tc0)
+ * Ignores vertex color.
+ *
+ * Compiled with: cgcomp -f q3_fp_replace.fcg q3_fp_replace.fpo
+ */
+
+void main(
+    float2 tc0 : TEXCOORD0,
+
+    uniform sampler2D tex0,
+
+    out float4 oColor : COLOR
+)
+{
+    oColor = tex2D(tex0, tc0);
+}

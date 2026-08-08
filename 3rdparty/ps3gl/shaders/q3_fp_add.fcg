@@ -1,0 +1,19 @@
+/*
+ * q3_fp_add.fcg -- Fragment program: texture0 + color
+ *
+ * PS3GL_TENV_ADD: output = tex2D(tex0, tc0) + vertexColor
+ *
+ * Compiled with: cgcomp -f q3_fp_add.fcg q3_fp_add.fpo
+ */
+
+void main(
+    float4 color : COLOR0,
+    float2 tc0   : TEXCOORD0,
+
+    uniform sampler2D tex0,
+
+    out float4 oColor : COLOR
+)
+{
+    oColor = tex2D(tex0, tc0) + color;
+}

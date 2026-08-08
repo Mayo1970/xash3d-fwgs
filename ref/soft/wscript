@@ -1,0 +1,40 @@
+#! /usr/bin/env python
+# encoding: utf-8
+# mittorn, 2018
+
+from waflib import Logs
+import os
+
+top = '.'
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	libs = [ 'ref_common', 'engine_includes', 'werror', 'yy_thunks' ]
+	# on PSVita do not link any libraries that are already in the main executable, but add the includes target
+	if bld.env.DEST_OS == 'psvita':
+		libs += [ 'sdk_includes' ]
+	else:
+		libs += [ 'public', 'M' ]
+
+	cflags = []
+	# AGENTS.md goal-10 freeze hunt: R_EdgeDrawing/R_DrawBrushModel declare
+	# ~391KB of edge/surface arrays as plain locals, against a 1MB main
+	# thread stack on PS3. -fstack-usage makes GCC emit a .su file per TU
+	# with the real per-function frame size, so the budget can be checked at
+	# build time instead of guessed at or measured only on hardware.
+	if bld.env.DEST_OS == 'ps3':
+		cflags += ['-fstack-usage']
+
+	bld.shlib(source   = bld.path.ant_glob('*.c'),
+		target   = 'ref_soft',
+		includes = '.',
+		defines  = 'REF_DLL=1',
+		cflags   = cflags,
+		use      = libs,
+		install_path = bld.env.LIBDIR
+	)

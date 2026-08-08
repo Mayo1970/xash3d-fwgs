@@ -1,0 +1,140 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	libs = ['vcs_info', 'werror', 'yy_thunks']
+
+	# STDINT_H is cs16-client's own knob for which integer-types header its
+	# public/ snapshot pulls in; the rest mirror what its CMakeLists adds for
+	# every non-MSVC target. LINUX/_LINUX are load-bearing in the Valve-era
+	# sources (they gate the POSIX branches), not a claim about the OS.
+	defines = [
+		'CLIENT_DLL',
+		'CLIENT_WEAPONS',
+		'STDINT_H=<cstdint>',
+		'LINUX',
+		'_LINUX',
+		'stricmp=strcasecmp',
+		'_strnicmp=strncasecmp',
+		'strnicmp=strncasecmp',
+	]
+
+	# No PS3_GAME_DEFINES entry is consumed here on purpose: Counter-Strike
+	# swaps this whole source tree in instead of gating hlsdk-portable's, so
+	# there is nothing for a game define to select. See the CSTRIKE comment
+	# above PS3_GAME_DEFINES in the root wscript.
+
+	includes = [
+		'include',
+		'include/hud',
+		'include/math',
+		'include/studio',
+		'.',
+		'particleman',
+		'../common',
+		'../engine',
+		'../pm_shared',
+		'../dlls',
+		'../game_shared',
+		'../public',
+		'../public/cl_dll',
+		# cs16-client's own 3rdparty/miniutl submodule is not vendored here:
+		# mainui already ships the same library and only draw_util.cpp
+		# (CUtlVector) and vgui_parser.cpp (miniutl.h) need it. Symbols are
+		# localized per relocatable module by xshlib's objcopy -G, so the
+		# menu and the client can each carry their own copy safely.
+		'../../3rdparty/mainui/miniutl',
+	]
+
+	# The source set is cs16-client's CMake glob list, not a recursive glob:
+	# cl_dll/VGUI/ and cl_dll/hl/ are dead code there and are not vendored.
+	# input_sdl.cpp is dropped for the same reason inputw32.cpp is -- it is
+	# the SDL2 mouse/gamecontroller backend, and input_xash3d.cpp is the one
+	# that implements the engine's IN_ClientMoveEvent/IN_ClientLookEvent
+	# extensions the PS3 pad goes through.
+	excluded_files = [
+		'ev_hldm.cpp',
+		'inputw32.cpp',
+		'input/input_sdl.cpp',
+		'cs_wpn/cs_baseentity.cpp',
+	]
+
+	source = bld.path.ant_glob([
+		'*.cpp',
+		'events/*.cpp',
+		'hud/*.cpp',
+		'cs_wpn/*.cpp',
+		'input/*.cpp',
+		'particleman/*.cpp',
+	], excl=excluded_files)
+
+	# voice_gamemgr.cpp is the server half of the voice manager (it defines
+	# CVoiceGameMgr against CBasePlayer) and nothing in the client references
+	# it; compiling it here would leave undefined server symbols in this
+	# module, which the final link cannot satisfy since xshlib localizes the
+	# real server module's symbols.
+	source += bld.path.parent.ant_glob([
+		'dlls/wpn_shared/*.cpp',
+		'pm_shared/*.cpp',
+		'game_shared/*.cpp',
+		'common/interface.cpp',
+		'public/utflib.cpp',
+	], excl=['game_shared/voice_gamemgr.cpp'])
+
+	source += bld.path.parent.parent.ant_glob('3rdparty/mainui/miniutl/*.cpp')
+
+	if not bld.env.HAVE_STRLCPY:
+		source += bld.path.parent.ant_glob('public/strlcpy.c')
+
+	if not bld.env.HAVE_STRLCAT:
+		source += bld.path.parent.ant_glob('public/strlcat.c')
+
+	# Valve-era sources use unnamed struct/union members throughout.
+	# -fno-strict-aliasing is not a warning silencer: this tree type-puns
+	# floats through int lvalues in the GoldSrc idiom (Q_rsqrt in
+	# cl_dll/util.cpp, the IS_NAN macro in pm_shared.cpp, the shared-weapon
+	# RNG seeding in com_weapons.cpp), which GCC is entitled to miscompile at
+	# -O2 under strict aliasing. Telling the compiler the assumption does not
+	# hold is the correct fix for code we are vendoring rather than rewriting.
+	common_flags = ['-fno-strict-aliasing']
+	# -fno-rtti is required, not a size tweak. xshlib.py localizes every symbol
+	# in this module except lib_client_exports, and localizing a symbol that
+	# lives in a COMDAT group makes ld discard the group while references to it
+	# survive: "typeinfo for IBaseInterface ... defined in discarded section".
+	# Keeping those symbols global instead would re-expose exactly the C++
+	# vtable/ODR collapse goal 10 fought -- CBasePlayerWeapon's typeinfo exists
+	# in both this client and the HL server module. Dropping RTTI removes the
+	# symbols altogether; nothing in this tree uses dynamic_cast, typeid or
+	# exceptions (checked).
+	cxxflags = ['-fms-extensions', '-fno-rtti'] + common_flags
+	cflags = list(common_flags)
+
+	# PPC64 ELFv1 addresses globals through a single 64KB .toc, and xshlib.py
+	# merges this whole module into one relocatable object before the final
+	# link, so ld's multi-TOC splitting never gets a chance. The Opposing
+	# Force server overflowed that limit at ~57 extra translation units; this
+	# client is ~140 against base HL1's 41, so it is over the line by
+	# construction rather than by luck. Same fix, same one-indirection cost.
+	if bld.env.DEST_OS == 'ps3':
+		cflags += ['-mminimal-toc']
+		cxxflags += ['-mminimal-toc']
+
+	bld.shlib(
+		source   = source,
+		target   = 'client',
+		name     = 'client',
+		features = 'c cxx',
+		includes = includes,
+		defines  = defines,
+		cflags   = cflags,
+		cxxflags = cxxflags,
+		use      = libs,
+		install_path = None,
+		idx = bld.get_taskgen_count()
+	)

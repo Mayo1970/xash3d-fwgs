@@ -1,0 +1,23 @@
+/*
+ * q3_fp_modulate2.fcg -- Fragment program: tex0 * tex1 (dual-texture lightmap)
+ *
+ * PS3GL_TENV_MODULATE2: output = tex2D(tex0, tc0) * tex2D(tex1, tc1)
+ * Used by RB_StageIteratorLightmappedMultitexture:
+ *   TMU0 = diffuse texture (tc0)
+ *   TMU1 = lightmap       (tc1)
+ *
+ * Compiled with: cgc -profile fp40 + cgcomp -a -f
+ */
+
+void main(
+    float2 tc0 : TEXCOORD0,
+    float2 tc1 : TEXCOORD1,
+
+    uniform sampler2D tex0,
+    uniform sampler2D tex1,
+
+    out float4 oColor : COLOR
+)
+{
+    oColor = tex2D(tex0, tc0) * tex2D(tex1, tc1);
+}

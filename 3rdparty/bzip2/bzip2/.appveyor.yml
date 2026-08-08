@@ -1,0 +1,83 @@
+environment:
+  matrix:
+
+    - COMPILER: MSVC2019
+      PLATFORM: x86
+      CC: cl.exe
+      APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2019
+      CMAKE_GENERATOR: NMake Makefiles
+
+    - COMPILER: MSVC2019
+      PLATFORM: amd64
+      CC: cl.exe
+      APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2019
+      CMAKE_GENERATOR: NMake Makefiles
+
+    - COMPILER: MSVC2017
+      PLATFORM: x86
+      CC: cl.exe
+      APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2017
+      CMAKE_GENERATOR: NMake Makefiles
+
+    - COMPILER: MSVC2017
+      PLATFORM: amd64
+      CC: cl.exe
+      APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2017
+      CMAKE_GENERATOR: NMake Makefiles
+
+    - COMPILER: MSVC2015
+      PLATFORM: x86
+      CC: cl.exe
+      APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2015
+      CMAKE_GENERATOR: NMake Makefiles
+
+    - COMPILER: MSVC2015
+      PLATFORM: amd64
+      CC: cl.exe
+      APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2015
+      CMAKE_GENERATOR: NMake Makefiles
+
+    - COMPILER: GCC
+      ARCH: 32
+      CC: gcc.exe
+      CMAKE_GENERATOR: MinGW Makefiles
+
+    - COMPILER: GCC
+      ARCH: 64
+      CC: gcc.exe
+      CMAKE_GENERATOR: MinGW Makefiles
+
+install:
+
+- if [%COMPILER%]==[MSVC2015] if [%PLATFORM%]==[amd64] call "C:\Program Files\Microsoft SDKs\Windows\v7.1\Bin\SetEnv.cmd" /x64
+- if [%COMPILER%]==[MSVC2015] if [%PLATFORM%]==[amd64] call "C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" x86_amd64
+- if [%COMPILER%]==[MSVC2015] if [%PLATFORM%]==[x86] call "C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" x86
+
+- if [%COMPILER%]==[MSVC2017] if [%PLATFORM%]==[amd64] call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvars64.bat"
+- if [%COMPILER%]==[MSVC2017] if [%PLATFORM%]==[x86] call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvars32.bat"
+
+- if [%COMPILER%]==[MSVC2019] call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat" %PLATFORM%
+
+- if [%COMPILER%]==[GCC] del /F /Q "C:\Program Files\Git\usr\bin\sh.exe"
+- if [%COMPILER%]==[GCC] set "PATH=C:\msys64\mingw%ARCH%\bin;%PATH%"
+
+build_script:
+# Clone the files for the large test suite
+# FIXME: git submodule isn't working with the MinGW environment:
+#   fatal: 'submodule' appears to be a git command, but we were not able to execute it. Maybe git-submodule is broken?
+- if not [%COMPILER%]==[GCC] git submodule update --init --recursive
+
+- mkdir build
+- cd build
+
+- cmake -G "%CMAKE_GENERATOR%" -DCMAKE_BUILD_TYPE=Release ..
+- cmake --build . --target install
+
+test_script:
+- ctest -V -C Release
+
+# Enable this to be able to login to the build worker. You can use the
+# `remmina` program in Ubuntu, use the login information that the line below
+# prints into the log.
+#on_finish:
+#- ps: $blockRdp = $true; iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-rdp.ps1'))

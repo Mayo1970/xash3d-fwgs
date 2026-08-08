@@ -1,0 +1,140 @@
+#! /usr/bin/env python
+# encoding: utf-8
+# a1batross, mittorn, 2018
+
+# Counter-Strike's menu. This is Velaron/mainui_cpp @ba8802c (the fork
+# cs16-client pins as its own 3rdparty/mainui_cpp submodule), NOT FWGS's
+# mainui_cpp -- see 3rdparty/mainui for that one. Exactly one of the two
+# supplies the waf name 'menu' that xshlib.py links; the root wscript's SUBDIRS
+# picks this tree only when PS3_GAME == 'cstrike'.
+#
+# The fork is what implements IGameMenuExports / "GameMenuExports001", which
+# cs16-client/cl_dll/cdll_int.cpp pulls through the engine's MenuFactory native
+# object and drives the buy, team and class menus with. Stock mainui exports no
+# such interface, so with it the CS client runs with g_pMenu == NULL and no buy
+# menu at all.
+#
+# The fork's own upstream wscript is not usable here: it is FWGS's unmodified
+# one, which neither compiles common/interface.cpp nor carries the cs16-client
+# include paths the fork's udll_int.cpp/BaseMenu.h need (the fork is only
+# buildable via cs16-client's CMake, which adds both). This file is 3rdparty/
+# mainui/wscript plus exactly those two things.
+
+from waflib import Logs, Configure
+import os
+
+top = '.'
+
+def options(opt):
+	# The stock mainui wscript owns --enable-stbtt; both subprojects are parsed
+	# for options regardless of which one is enabled, so registering it twice
+	# would be a waf option collision. It is read from conf.options below all
+	# the same.
+	return
+
+def configure(conf):
+	conf.load('fwgslib cxx11')
+	conf.env.append_unique('DEFINES', 'STDINT_H=<cstdint>')
+
+	if not conf.check_std('cxx11'):
+		conf.define('MY_COMPILER_SUCKS', 1)
+
+	conf.define('MAINUI_USE_CUSTOM_FONT_RENDER', 1)
+
+	nortti = {
+		'msvc': ['/GR-'],
+		'default': ['-fno-rtti']
+	}
+
+	conf.env.append_unique('CXXFLAGS', conf.get_flags_by_compiler(nortti, conf.env.COMPILER_CC))
+
+	conf.define_cond('MAINUI_USE_STB', conf.options.USE_STBTT)
+
+	# PS3 takes NEITHER TTF backend, so FontManager falls straight through to
+	# CBitmapFont -- identical reasoning to 3rdparty/mainui/wscript, read the
+	# long comment there. Short version: the .ttf files are not in the PKG, each
+	# failed lookup costs a full searchpath walk (~4-5s of boot across the seven
+	# requests, and LoadFontDataFile only caches hits), and shipping the fonts
+	# instead was tried on hardware and made all menu text invisible.
+	if conf.env.DEST_OS in ['win32', 'dos', 'ps3']:
+		pass
+	else:
+		if not conf.options.USE_STBTT and not conf.options.LOW_MEMORY:
+			conf.check_pkg('freetype2', 'FT2', FT2_CHECK)
+			conf.define('MAINUI_USE_FREETYPE', 1)
+
+FT2_CHECK='''extern "C" {
+#include <ft2build.h>
+#include FT_FREETYPE_H
+}
+
+int main() { return FT_Init_FreeType( NULL ); }
+'''
+
+def build(bld):
+	source = bld.path.ant_glob([
+		'*.cpp',
+		'font/*.cpp',
+		'menus/*.cpp',
+		'menus/dynamic/*.cpp',
+		# The client-side windows the fork adds, and the reason this tree
+		# exists: BuyMenu/JoinGame/JoinClass are what CGameMenuExports::
+		# ShowVGUIMenu switches on. Not in FWGS mainui, and not in the upstream
+		# wscript's glob either (only its CMakeLists globs menus/client/*.cpp).
+		'menus/client/*.cpp',
+		'model/*.cpp',
+		'controls/*.cpp'
+	])
+
+	source += bld.path.ant_glob('miniutl/*.cpp')
+
+	# The interface registry (InterfaceReg / CreateInterface / Sys_GetFactoryThis)
+	# that EXPOSE_SINGLE_INTERFACE_GLOBALVAR in udll_int.cpp registers into.
+	# Reuse cs16-client's already-PS3-patched copy (its dlopen half is compiled
+	# out under XASH_PS3); do not vendor a second one.
+	#
+	# Both this module and the client compile their own copy, and that is
+	# correct, not a redundancy: xshlib.py localizes every symbol a module does
+	# not export, so each ends up with a private s_pInterfaceRegs. The client's
+	# registry holds GameClientExports001 and its Sys_GetFactoryThis() hands its
+	# own CreateInterface to g_pMenu->Initialize; this module's registry holds
+	# GameMenuExports001 and its CreateInterface is the one name exported
+	# globally, which is what engine/client/dll_int/cl_gameui.c's
+	# UI_GetMenuFactory looks up by name. cs16-client/cl_dll/exports.txt
+	# deliberately does not list CreateInterface, so there is no collision.
+	source += bld.path.parent.parent.ant_glob('cs16-client/common/interface.cpp')
+
+	includes = [
+		'.',
+		'miniutl/',
+		'font/',
+		'controls/',
+		'menus/',
+		'model/',
+		'sdk_includes/common',
+		'sdk_includes/engine',
+		'sdk_includes/public',
+		'sdk_includes/pm_shared',
+		# interface.h, and the IGameMenuExports/IGameClientExports headers the
+		# fork includes as "cl_dll/IGame*Exports.h". These live in the CS SDK,
+		# not in mainui's own sdk_includes.
+		'../../cs16-client/common',
+		'../../cs16-client/public',
+	]
+
+	bld.shlib(
+		source   = source,
+		target   = 'menu',
+		name     = 'menu',
+		includes = includes,
+		use      = 'werror FT2 GDI32 USER32 yy_thunks',
+		install_path = None,
+		cmake_skip = True,
+		# Required, not decorative. This module and cs16-client/cl_dll both
+		# compile cs16-client/common/interface.cpp from two different taskgen
+		# paths; waf's default idx is a per-path counter, so both can land on
+		# the same output object name and waf then silently reuses one
+		# taskgen's object for the other (the goal-10 bug -- see
+		# get_taskgen_count in the root wscript).
+		idx = bld.get_taskgen_count()
+	)
