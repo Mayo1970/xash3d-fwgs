@@ -1,0 +1,61 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+# TFC-5: FWGS/openvgui, the classic VGUI1 widget-toolkit reimplementation
+# (Panel, App, Font, controls, layout -- no dlopen anywhere, confirmed by a
+# whole-tree grep). Vendored from github.com/FWGS/openvgui at pinned commit
+# 1b89d197c4e443b9df3923cfe60a3a873ca94d7d (the exact commit tf15-client's
+# own .gitmodules pins), plus its own nested miniutl dependency
+# (github.com/FWGS/MiniUTL @ 096c449bfe747d2bd270f4ccae4fae21be70d791) --
+# only miniutl/utlmemory.cpp is used from it here, same as upstream's own
+# CMakeLists.txt. Dropped: prebuilt lib/ binaries (win32_vc6/vgui.lib etc,
+# not needed -- this is a from-source static build) and the dead make/
+# Makefile/vcproj tree. src/platform/{win32,apple} are dropped too: this
+# project only ever builds the POSIX branch, same "only what the wscript
+# needs" convention already applied to opus/opusfile/bzip2. Confirmed via a
+# whole-tree grep: no xash/HL/engine header is referenced anywhere in
+# src/vgui or src/platform/posix -- this library is fully self-contained
+# against its own include/ + miniutl/, no engine/common/public path needed.
+#
+# Built as a plain stlib, linked into tf15-client/cl_dll's own 'client'
+# target via use=, NOT a --static-linking reloc module -- see
+# tf15-client/3rdparty/vgui_support/wscript's comment for why that path is
+# guaranteed to fail on this no-dlopen port.
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	source = bld.path.ant_glob([
+		'src/vgui/*.cpp',
+		'src/platform/posix/*.cpp',
+		'miniutl/utlmemory.cpp',
+	])
+
+	# Same non-MSVC renames every other vendored SDK in this tree already
+	# needs (tf15-client/cl_dll, tf15-client/dlls, cs16-client, ...).
+	defines = [
+		'stricmp=strcasecmp',
+		'_vsnprintf=vsnprintf',
+	]
+
+	# miniutl/minbase_endian.h's WordSwapC/DWordSwapC (and a few old
+	# GoldSrc-era VGUI1 widgets) type-pun via *(uint16*)&x / *(uint32*)&x --
+	# the same idiom tf15-client/dlls and tf15-client/cl_dll already carry
+	# this exact flag for, not a new pattern.
+	cxxflags = ['-fno-strict-aliasing']
+
+	bld.stlib(
+		source          = source,
+		target          = 'vgui',
+		name            = 'vgui',
+		includes        = ['include', 'miniutl', 'src/platform/posix'],
+		export_includes = ['include'],
+		defines         = defines,
+		cxxflags        = cxxflags,
+		use             = 'werror',
+		idx             = bld.get_taskgen_count()
+	)

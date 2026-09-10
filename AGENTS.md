@@ -2192,6 +2192,7 @@ configure fails loudly on an unknown gamedir, a `TITLE_ID` that isn't exactly
 ./waf configure --ps3 --gamedir=gearbox --static-linking=...  # gearbox -> XASHOF000, build_opfor/
 ./waf configure --ps3 --gamedir=ricochet --static-linking=... # ricochet-> XASHRC000, build_ricochet/
 ./waf configure --ps3 --gamedir=cstrike --static-linking=...  # cstrike -> XASHCS000, build_cs/
+./waf configure --ps3 --gamedir=tfc --static-linking=...      # tfc     -> XASHTF000, build_tfc/
 ```
 
 `ricochet` currently carries **no game code of its own** -- it builds base HL1
@@ -2626,6 +2627,985 @@ coexist without overwriting each other.
 Debug: UDP log sink -- run `nc -ul 18194` on the dev PC; wire the sending
 side up first thing in `PS3_Init()` (`sys_ps3.c`), per goal-stack item 1.
 There is no GDB stub for retail homebrew.
+
+**Team Fortress Classic (`tfc`) planning, 2026-09-04 -- goal ladder set, TFC-1
+landing this session.** Source SDK is Velaron/tf15-client (cloned locally at
+`E:\Users\Matteo\Desktop\HL1\tf15-client`, commit `72c6eb2`). Like Counter-
+Strike, TFC does **not** fit the `#ifdef`-in-one-vendored-tree model --
+`dlls/exports_<gamedir>.txt` and inline `PS3_GAME_DEFINES` gates are the
+wrong tool here, same reasoning as CS above. Unlike CS, TFC's client
+(`cl_dll/`) and server (`dlls/`) live in **one** tree, not two separate SDKs
+-- structurally closer to how OpFor/Blue Shift are one tree, except the mod
+diverges too much from base HL1 to gate inline (sentry guns, dispenser,
+nine player classes, `tf_gamerules`, 123 files under `dlls/` alone), so it
+still needs a whole-tree swap per waf `name=`, the same mechanism CS uses.
+
+The load-bearing finding from investigation (not yet coded): TFC's in-game
+UI (team select, class select, HUD chrome, scoreboard, command menu) is
+**real, load-bearing classic VGUI1 code** -- `gViewPort` is constructed for
+real from `vgui_TeamFortressViewport.cpp`, unlike base HL1's own `vgui_*.cpp`
+files, which are dead code excluded entirely by
+`hlsdk-portable/cl_dll/wscript`. If VGUI1 never initializes on PS3, the
+client cannot join a team or pick a class -- functionally unplayable, not
+missing a cosmetic like CS's buy menu. Checked whether TFC's own
+`mainui_cpp` pin (Velaron's fork, branch `tf15-client`) does what
+`mainui_cs` did for CS (replace VGUI with native mainui windows) -- it does
+**not**; diffed live against upstream FWGS/mainui_cpp master and it is minor
+compat fixes only, no team/class/HUD windows. So there is no ready-made
+"skip VGUI1" escape hatch for TFC the way there was for CS.
+
+Goal ladder:
+
+- **TFC-1, flavor identity -- HARDWARE-VALIDATED 2026-09-04.** Boots to the
+  menu under `-game tfc`, reads the user's staged `tfc/` tree correctly, no
+  crash. As expected, no TFC gameplay logic yet (stock hlsdk-portable code).
+  `tfc` added to `PS3_FLAVORS` ->
+  `XASHTF000` / `build_tfc/` / `icons/tf/ICON0.PNG`, gamedir `tfc` (downloads
+  folder `tfc_downloads`, same convention as `cstrike`/`cstrike_downloads`).
+  No `PS3_GAME_DEFINES` entry, same reasoning as CSTRIKE above. Boots to menu
+  under `-game tfc` on the **stock** hlsdk-portable tree -- no TFC game code
+  yet, this goal only proves the flavor plumbing and packaging, mirroring
+  how CS-1 landed before CS-2/3/4 swapped in the real SDKs. Docker build
+  scripts `scripts/docker-build-tfc(.sh/.ps1)` and
+  `scripts/docker-build-tfc-debug(.sh/.ps1)` added, modeled on the cstrike
+  ones.
+- **TFC-2, server -- vendored 2026-09-04, not yet build-tested.** tf15-client's
+  `dlls/` (74 `.cpp` matching `SVDLL_SOURCES` exactly -- the six commented-out
+  CMake entries, `dbghelpers.cpp`/`genericmonster.cpp`/`menu.cpp`/
+  `mpstubb.cpp`/`prop.cpp`/`rpg.cpp`, were never copied) plus the shared
+  `common/`, `engine/`, `public/`, `pm_shared/`, `game_shared/`, `wpn_shared/`
+  trees (vendored wholesale now since both the future client and this server
+  need them from the same tf15-client repo, unlike CS's two independent
+  SDKs) landed at repo-root `tf15-client/`. New `tf15-client/dlls/wscript`
+  supplies the `server` SUBDIRS row, gated on `PS3_GAME == 'tfc'`; the
+  existing `hlsdk-portable/dlls` row's guard was widened to exclude `tfc` too
+  (`x.env.PS3_GAME not in ('cstrike', 'tfc')`). `dlls/exports.txt`: 4 entry
+  points (`GiveFnptrsToDll`/`GetEntityAPI`/`GetEntityAPI2`/
+  `GetNewDLLFunctions` -- unlike hlsdk-portable, this tree really does define
+  `GetNewDLLFunctions`, confirmed in `cbase.cpp`) + 156 entity classnames via
+  the same `LINK_ENTITY_TO_CLASS` grep CS used.
+
+  Three real findings while vendoring, none guessed:
+  1. **`public/build.h` had the same missing-`__PPU__`-branch bug every prior
+     vendored SDK had** (`#undef XASH_PS3` + `#elif defined __PPU__ ->
+     #define XASH_PS3 1`, same two-line patch as hlsdk-portable's/cs16-
+     client's/mainui's copies). Its CPU/endian detection already handled PS3
+     correctly with no changes, same as every prior SDK.
+  2. **A real, exact repeat of a CS finding**:
+     `common/xash3d_types.h`'s `LittleFloat()` was declared `_inline` (an
+     MSVC-ism, not valid C) inside its `#ifdef XASH_BIG_ENDIAN` arm --
+     never compiled before on any little-endian target. Fixed to
+     `static inline`, identical to the fix cs16-client's own copy of this
+     file needed.
+  3. **Confirmed a bug class CS's ReGameDLL_CS *did* have does NOT apply
+     here**: `dlls/extdll.h` and `cl_dll/cl_dll.h` define `XASH_64BIT`
+     themselves from a direct `__powerpc64__`/`__LP64__` check, the same
+     autodetect logic upstream `build.h` uses -- they do not rely on
+     `build.h` being included at all. So unlike regamedll, no
+     `XASH_64BIT=1` wscript define is needed. Also unlike regamedll,
+     `public/build.h` here is NOT a dead snapshot: `common/xash3d_types.h`
+     really does `#include` it, so the real big-endian autodetect flows
+     through once patched -- no `XASH_BIG_ENDIAN=1` belt-and-suspenders
+     define needed either. Checked before assuming either landmine applied,
+     per [[project_xashps3_cstrike_flavor]]'s lesson about dead `build.h`
+     snapshots.
+
+  Also checked and deliberately left alone: `dlls/util.cpp:116`'s PRNG seed
+  type-puns a float through `*(int *)&low` (same GoldSrc idiom CS hit) --
+  covered by `-fno-strict-aliasing` in the new wscript, not a source edit,
+  matching regamedll's approach rather than hlsdk-portable's macro-rewrite
+  one. `dlls/nodes.cpp`'s `<direct.h>` include is `#ifdef __DOS__`-guarded,
+  not reachable on PS3 -- false alarm, no fix needed. Zero `dynamic_cast`,
+  zero `<memory.h>` in the whole vendored tree.
+
+  **Deliberately NOT added, pending a real build**: `-fno-rtti` and the
+  cstrike-only COMDAT-group rename. Both exist in
+  [[project_xashps3_cstrike_flavor]] to fix a collision between *two
+  independently diverged* SDKs sharing a same-named class with a *different*
+  layout. TFC's future client and this server compile the *same*
+  `wpn_shared`/`pm_shared` sources from one tree, so any shared class's
+  vtable will be byte-identical between the two compiles -- structurally the
+  same situation base hlsdk-portable's own `dlls`/`cl_dll` split already has
+  (`CLIENT_WEAPONS` compiles several weapon sources into both) without
+  needing either fix. Revisit only if a real "typeinfo ... defined in
+  discarded section" link error says otherwise. Also added `-mminimal-toc`
+  proactively (server alone is ~89 TUs -- 74 dlls + 12 wpn_shared + 3
+  pm_shared -- close enough to gearbox's known-bad ~98 to not be worth a
+  build round-trip to confirm).
+
+  **BUILD-VERIFIED 2026-09-04** (`docker-build-tfc.ps1`, real `ps3dev/ps3dev:latest`
+  toolchain, ten rebuild rounds to a clean `EBOOT.pkg`, 3.49MB, ContentID
+  `UP0001-XASHTF000_00-...`) -- confirming the "nothing here has ever been
+  compiled" read: **`BUILD_SERVER` defaults `OFF` in upstream tf15-client's
+  own `CMakeLists.txt` and its CI never turns it on** (only Android/Windows/
+  Linux client-only presets run), so this really was this server's first
+  build on any platform, any compiler. Every fix below is a real compiler/
+  linker error, none guessed, and each was applied by checking base
+  hlsdk-portable's equivalent, an existing sibling declaration in the same
+  tree, or a real call site -- never by inventing behavior. Grouped by
+  class, not chronological:
+  - **Header declarations lagging behind their own `.cpp` definitions** (the
+    single largest class, ~10 instances): `player.h`'s `GiveAmmo`/
+    `RemovePlayerItem` declared with a different arg count than
+    `player.cpp`'s real bodies (fixed by adding a default `pIndex = NULL`
+    and widening `RemovePlayerItem` to 2 args, matching hlsdk-portable's own
+    signatures exactly); `Pain`/`GetGunPosition`/`TeamID`/`AddPoints`/
+    `AddPointsToTeam`/`StopObserver` defined in `player.cpp` but never
+    declared in `player.h` at all; `world.cpp`'s real `InstallGameRules`
+    takes a `const char *szGameName` (branches on it -- TFC vs. HL rules) but
+    `gamerules.h` still declared hlsdk's old 0-arg version; `subs.cpp`'s
+    `TeamFortress_CalcEMPDmgRad( float dmg, float rad )` didn't match either
+    `cbase.h`'s or `player.h`'s `float &dmg, float &rad` -- fixed by
+    reference since two independent headers already agreed on it. `TeamID`
+    additionally needed a real base virtual added to `cbase.h` (it's called
+    polymorphically through a bare `CBaseEntity *` in
+    `CHalfLifeTeamplay::GetTeamID`, unlike `GiveAmmo`/`RemovePlayerItem`,
+    which are only ever called through `CBasePlayer *` and safely "hide"
+    rather than override their differently-shaped `cbase.h` base stubs --
+    same tolerance hlsdk-portable's own `player.h` already relies on).
+  - **Missing member variables**: `m_vecLastViewAngles` (`Vector`),
+    `m_flNextAmmoBurn`/`m_flAmmoStartCharge`/`m_flNextChatTime` (`float`),
+    `m_iAutoWepSwitch` (`int`), `m_szTeamName` (`char[TEAM_NAME_LENGTH]` --
+    matches hlsdk-portable's `player.h` verbatim, including the constant).
+  - **A real name-shadowing bug**: `player.cpp`'s `CheckPowerups( pev )` call
+    (base-HL1 code, unchanged from hlsdk-portable) silently resolved to a
+    *different*, TFC-added, dead member `CBasePlayer::CheckPowerups(void)`
+    instead of the free function two lines above it, because the member
+    declaration (never defined, never called elsewhere) shadows the
+    file-scope one by ordinary C++ lookup. Fixed with `::CheckPowerups(pev)`
+    at the one real call site; the dead member was left alone.
+  - **Two declared-but-never-defined names that turned out to be an
+    unfinished rename**: `TeamFortress_{Init,Update}StatusBar` were declared
+    but had no body anywhere; `InitStatusBar`/`UpdateStatusBar` (no prefix,
+    hlsdk-portable's own convention) had real bodies in `player.cpp` but no
+    declaration. Renamed the dead declarations to match, rather than adding
+    a second pair.
+  - **A duplicate stub definition with a wrong signature**: `subs.cpp` had
+    *two* empty `CBaseEntity::DoDrop` bodies -- one `(Vector *p_vecOrigin)`,
+    one `(Vector vecOrigin)` matching `cbase.h`'s real declaration. Deleted
+    the wrong one; both were no-ops so nothing was lost.
+  - **A dangling engine-internal include**: `world.cpp` used
+    `physics_interface_t`/`server_physics_api_t`/`SV_PHYSICS_INTERFACE_VERSION`/
+    `g_physfuncs` (an optional FWGS `Server_GetPhysicsInterface` hook) without
+    including `dlls/physcallback.h` -- and that header itself `#include`s a
+    `physint.h` that **does not exist anywhere in the upstream tf15-client
+    repo**, confirmed against a clean checkout. hlsdk-portable's own
+    `world.cpp` has no equivalent at all and works fine without it, and the
+    entry point was never in `exports.txt`, so the engine would never have
+    called it even if it compiled. Excluded the whole block (in `world.cpp`
+    and the matching `g_physfuncs` global in `h_export.cpp`) rather than
+    trying to source a matching header from a different FWGS snapshot.
+  - **Nine link-bearing virtuals with no definition anywhere in the tree**
+    (`CBaseEntity`/`CBasePlayer`'s `TeamFortress_TakeEMPBlast`/
+    `TeamFortress_EMPRemove`/`TeamFortress_TakeConcussionBlast`/
+    `TeamFortress_Concuss`/`EngineerUse`/`PainSound`, `CGrenade`'s
+    `setBirthdayModel`/`setModel`, and `CBasePlayer::TF_AddFrags`) --
+    surfaced only at final link, as undefined vtable-entry references, since
+    C++ doesn't require every virtual to be overridden. All confirmed never
+    *called* anywhere in the tree except `TF_AddFrags` (three real call
+    sites in `wpn_shared/tf_wpn_axe.cpp`, a melee kill bonus), so the first
+    eight got the same empty-no-op-default treatment this header already
+    uses for its own `AddPoints`/`TeamID`/etc., and only `TF_AddFrags` got a
+    real body -- routed through the existing `AddPoints` (which already
+    sends the `gmsgScoreInfo` HUD update) rather than a bare
+    `pev->frags += iFrags`, since the latter would silently desync the
+    client's scoreboard display.
+  - **Two dead entities correctly excluded from `exports.txt`**, same
+    discipline as hlsdk-portable's own `my_monster`/`trip_beam`: TFC's
+    `dlls/tempmonster.cpp` is entirely `#if 0`, and `trip_beam`
+    (`effects.cpp`) is `#if _DEBUG` -- both confirmed, not assumed, by
+    reading the actual gate before removing the exports.txt lines that
+    produced "undefined reference to `my_monster`" style linker errors.
+  - **One `-Werror=strict-prototypes`/`-Werror=old-style-definition` class**,
+    all in the vendored `pm_shared/pm_shared.c`: nine C functions defined
+    with empty `()` instead of `(void)` (`PM_InitTextureTypes`,
+    `PM_CheckVelocity`, `PM_AddCorrectGravity`, `PM_FixupGravityVelocity`,
+    `PM_WalkMove`, `PM_CheckWater`, `PM_AddGravity`, `PM_Physics_Toss`,
+    `PM_NoClip`) -- same class of bug as the PSL1GHT vendor-header
+    `-Wstrict-prototypes` issue this project already had a precedent for
+    (`io/pad.h`/`net/net.h`), just in vendored SDK C code instead of a
+    system header this time.
+  - **One real type-identity bug, not a warning**: `PM_HullPointContents`
+    (`struct hull_s *`) rejected a `hull_t *` argument as an "incompatible
+    pointer type" even though GCC's own diagnostic printed both sides
+    identically (`hull_t * {aka struct hull_s *}`) -- caused by
+    `pm_shared.c` including `pm_defs.h` (which only forward-references
+    `struct hull_s *` inside `pmove_t`) *before* `com_model.h` (which
+    supplies the real `typedef struct hull_s {...} hull_t`), creating two
+    declaration points for the same-spelled tag. Fixed by reordering the
+    includes so the real struct is fully defined first.
+  - **Two `char*`/`const char*` classes** (`-Werror=write-strings`):
+    seven `char *sFoo[] = { "literal", ... }` string-literal arrays in
+    `tfort.cpp` (`sClassCfgs`, `sClassModels`, `sClassNames`,
+    `sGrenadeNames`, `sNewClassModelFiles`, `sOldClassModelFiles`,
+    `sTeamSpawnNames`) and `tforttm.cpp`'s `sTNameCvars[]`/`GetTeamName()`'s
+    return type, plus `world.cpp`'s `InstallGameRules` (see above) -- all
+    fixed by widening to `const char *`, checked against every call site
+    first (`STRING()`, `PRECACHE_MODEL`, `ENGINE_FORCE_UNMODIFIED` all
+    already accept `const char *`).
+  - **One incomplete stub** (`tforttm.cpp`'s `TeamFortress_SortTeams`,
+    explicitly marked `// Velaron: TODO` upstream): fell through with no
+    return on its main path. Added a `return TRUE;` to make the
+    missing-return build error go away -- not a claim the sorting logic
+    itself is implemented, it still isn't.
+  - **The real cross-SDK vtable collision CS-6 already root-caused, hit
+    again for a different reason.** Final link failed with `typeinfo for
+    CBasePlayerWeapon ... defined in discarded section`, the exact CS-6
+    signature -- but this is *not* the same structural cause CS had
+    permanently. It is specific to this in-between state: TFC-3 (the real
+    tf15-client client) hasn't landed, so this build pairs tf15-client's
+    `dlls/` (which redefines `CBasePlayerWeapon`/`CGrenade`/etc. with
+    TF-specific fields) against the *stock* hlsdk-portable `cl_dll/` --
+    two divergent definitions of the same class names, structurally
+    identical to cstrike's cs16-client-vs-ReGameDLL_CS split. Fixed by
+    widening `xshlib.py`'s `RENAME_COMDAT_GROUPS` gate from
+    `PS3_GAME == 'cstrike'` to `PS3_GAME in ('cstrike', 'tfc')`. Once TFC-3
+    lands and both `client`/`server` come from the same tf15-client tree
+    (byte-identical shared classes, the same safe shape valve/gearbox/
+    bshift already have), this gate becomes unneeded but harmless -- no
+    need to narrow it again.
+
+  **HARDWARE-VALIDATED 2026-09-04: runs, no crash.** Confirms the "does it
+  compile/link/boot without crashing" bar this goal was scoped to -- not
+  "is TFC playable," which still needs TFC-3 (client) and TFC-5 (VGUI). This
+  build pairs the new TFC server with the *stock* hlsdk-portable client, so
+  the client has no idea about TFC's entities, usermessages, or VGUI
+  requirements.
+- **TFC-3, client -- vendored 2026-09-04, not yet build-tested.** tf15-client's
+  `cl_dll/` (95 files: 91 at root + 4 under `cl_dll/tfc/`, matching
+  `CLDLL_SOURCES` exactly -- confirmed no commented-out CMake entries, so a
+  recursive glob is safe) landed at `tf15-client/cl_dll/`. New
+  `tf15-client/cl_dll/wscript` supplies the `client` SUBDIRS row, gated on
+  `PS3_GAME == 'tfc'`; the existing `hlsdk-portable/cl_dll` row's guard was
+  widened to exclude `tfc` too (`x.env.CLIENT and x.env.PS3_GAME not in
+  ('cstrike', 'tfc')`), same shape as CS's client pair. `cl_dll/exports.txt`:
+  43 entries, verified by grepping every `DLLEXPORT` site in the vendored
+  tree (not assumed from the CS/hlsdk precedent) -- the symbols are scattered
+  across many files (`cdll_int.cpp` only defines 15 of them; the rest live in
+  `view.cpp`/`input.cpp`/`input_mouse.cpp`/`in_camera.cpp`/`entity.cpp`/
+  `demo.cpp`/`tri.cpp`/`GameStudioModelRenderer.cpp`/`tfc/tf_weapons.cpp`),
+  but the resulting set is byte-identical to `hlsdk-portable/cl_dll/exports.txt`
+  once `HUD_ChatInputPosition` (implemented only in the excluded
+  `vgui_SpectatorPanel.cpp`, same as hlsdk-portable's own treatment of that
+  symbol) is dropped -- confirming this is genuinely the same `cldll_func_t`
+  ABI, just organized differently. `HUD_MobilityInterface` is real and
+  required here (not SDK cruft): `mobile_engfuncs_t`/`MOBILITY_API_VERSION`
+  are declared in `tf15-client/engine/mobility_int.h`, and this project's own
+  engine already calls into it from `engine/client/dll_int/cl_mobile.c`.
+
+  Same VGUI1 scoping decision as the goal-ladder intro: `vgui_*.cpp` (12
+  root files, `vgui_TeamFortressViewport.cpp` alone is 2630 real lines --
+  team/class-select, not dead code) and `input_goldsource.cpp` (dlopen-based
+  SDL2 shim, unsupported on PS3) are excluded from the source glob, matching
+  `hlsdk-portable/cl_dll/wscript`'s own precedent for both. `game_shared/`
+  contributes nothing at all: all 9 files `CLDLL_SOURCES` pulls from it
+  (7 `vgui_*.cpp` widget helpers + `voice_banmgr.cpp` + `voice_status.cpp`)
+  are VGUI/voice-UI, so nothing survives the same exclusion and the wscript
+  doesn't pull from that directory. This is deliberately **not** TFC-5 --
+  landing real VGUI1 stays a separate, later goal; expect real link errors
+  from files that reference VGUI globals/hooks (`gViewPort`, `VGui_Startup`,
+  etc.) defined only in the excluded files, to be resolved with minimal no-op
+  stubs (not guessed preemptively -- let the real linker output enumerate
+  them, same discipline as every prior vendoring goal) once a real build is
+  attempted.
+
+  `../dlls` is a required include (not carried over from
+  `tf15-client/dlls/wscript`'s own list): confirmed by reading
+  `wpn_shared/tf_wpn_*.cpp` and `cl_dll/tfc/tf_weapons.cpp` directly, both
+  `#include "extdll.h"`/`"cbase.h"`/`"weapons.h"`/`"nodes.h"`/`"player.h"`/
+  `"gamerules.h"`/`"tf_defs.h"`, all of which live only in `tf15-client/dlls/`
+  -- same reason `hlsdk-portable/cl_dll/wscript` already needs it for its own
+  predicted weapon sources. `CLIENT_DLL` is a required define, confirmed by
+  reading `dlls/weapons.h`/`dlls/util.h` (both `#ifdef CLIENT_DLL`), not
+  assumed from precedent alone.
+
+  Same idx-collision (`get_taskgen_count()`) precedent CS needed, since
+  `wpn_shared/tf_wpn_*.cpp` and `pm_shared/*.c` compile into both this
+  taskgen and `tf15-client/dlls`'s. `-mminimal-toc`/`-fno-strict-aliasing`
+  carried over from `tf15-client/dlls/wscript` for the same reasons recorded
+  there. **`-fno-rtti` deliberately NOT added**, per that same file's own
+  reasoning (quoted there in full): this client and TFC-2's server compile
+  the *same* shared sources from one tree, so their vtables are
+  byte-identical -- not CS's two-independently-diverged-SDK situation that
+  made `-fno-rtti` load-bearing. Add only if a real link produces a
+  `typeinfo ... defined in discarded section` error. No `xshlib.py` change
+  needed: `RENAME_COMDAT_GROUPS` already covers `'tfc'` and
+  `get_taskgen_count()` is already generic.
+
+  **BUILD-VERIFIED 2026-09-04** (`docker-build-tfc.ps1`, real
+  `ps3dev/ps3dev:latest` toolchain, ~3.36MB `EBOOT.pkg`, ContentID
+  `UP0001-XASHTF000_00-...`) -- eight rebuild rounds, every fix a real
+  compiler/linker error, none guessed. Grouped by class:
+  - **`game_shared` needed on the include path even with zero `.cpp` pulled
+    from it**: `hud.h` unconditionally `#include "voice_status.h"` (a
+    header, not the excluded `.cpp`) for `CHud`'s own declarations --
+    confirmed via a real "No such file" error before assuming the directory
+    was safe to drop from `includes` entirely.
+  - **Seven virtuals TFC-2 had already given server-only no-op bodies to,
+    on the theory that "no definition anywhere in the tree" (true only for
+    what TFC-2 had vendored at the time)**: `cl_dll/tfc/tf_baseentity.cpp`
+    -- a genuine, Valve/Velaron-authored **client-only stub file** (the same
+    idiom this file already uses for dozens of `CBaseDelay`/`CCrowbar`/
+    `CGrenade`/etc no-op bodies the client needs to link but never runs) --
+    turned out to define `CBaseEntity::TeamFortress_TakeEMPBlast/EMPRemove/
+    TakeConcussionBlast/Concuss`, `CGrenade::setBirthdayModel/setModel`,
+    `CBasePlayer::PainSound`, and `CBasePlayer::EngineerUse` for real,
+    colliding with TFC-2's inline header bodies once the client actually
+    entered the build. Fixed by gating each header body behind
+    `#ifndef CLIENT_DLL` (server keeps its existing inline no-op unchanged)
+    with a bare declaration under `#else` (client's own body comes from
+    `tf_baseentity.cpp`) -- `cbase.h`, `weapons.h`, `player.h`. **One of the
+    seven, `EngineerUse`, is not just a duplicate**: `tf_baseentity.cpp`'s
+    real body returns `TRUE`, not the header's `FALSE` -- a genuinely
+    different default per side, not a behavior-preserving split like the
+    other six.
+  - **A real signature bug in the same stub file**: `tf_baseentity.cpp`'s
+    `CBasePlayer::RemovePlayerItem` still used the original 1-arg upstream
+    signature, not the 2-arg one TFC-2 already widened `player.h` to (to
+    match `dlls/player.cpp`'s real body) -- fixed by adding the missing
+    `bool bCallHolster` parameter to the stub, unused in its no-op body.
+  - **The real, largest one: `gViewPort` (`TeamFortressViewport*`) compile-time
+    coupling reaches far past the `vgui_*.cpp` files** into `ammo.cpp`,
+    `cdll_int.cpp`, `death.cpp`, `entity.cpp`, `hud.cpp`, `hud_redraw.cpp`,
+    `hud_spectator.cpp`, `input.cpp`, `menu.cpp`, `saytext.cpp`,
+    `text_message.cpp` -- confirmed by real "No such file"/incomplete-type
+    errors cascading through each, not guessed up front. Every real
+    `gViewPort`/`GetClientVoiceMgr`/`VGui_Startup`/`Scheme_Init` call site
+    (dozens) and every `vgui_*.h`/`voice_status.h` include in those files is
+    now `#if USE_VGUI`-gated (never defined in this build), mirroring the
+    exact guard `hlsdk-portable/cl_dll/cdll_int.cpp` already uses for the
+    same reason. Two required a real behavior-preserving trick, not a blind
+    delete: `hud_spectator.cpp`'s `DRC_CMD_STATUS`/`DRC_CMD_BANNER` director-
+    message cases call `READ_LONG()`/`READ_WORD()`/`READ_STRING()` as a
+    *side effect* (consuming bytes from the network buffer) inline with the
+    `gViewPort` call -- gating the whole statement away would desync the
+    parser for every later case in the same message, so the `READ_*` calls
+    were kept unconditional and only the VGUI use gated. Two functions
+    (`HandleButtonsDown`/`HandleButtonsUp`) already began with
+    `if (!gViewPort) return;` in the *original* code -- i.e. upstream itself
+    already treats all spectator button handling as VGUI-gated, not just the
+    one `ShowMenu()` call inside -- so their whole bodies were wrapped rather
+    than only the literal `gViewPort->` lines, reproducing that exact
+    existing behavior instead of inventing a "partial function without VGUI"
+    variant nobody asked for.
+  - **Two globals silently lost their only definition** by excluding
+    `vgui_TeamFortressViewport.cpp` wholesale: `g_iPlayerClass`/
+    `g_iTeamNumber`/`g_iUser1`/`g_iUser2`/`g_iUser3` are declared `extern` in
+    `hud.h` and read/written unconditionally by `hud_spectator.cpp`'s
+    non-VGUI logic (spectator mode state), but were defined nowhere once
+    their one source file was gone -- a real "undefined reference" link
+    error, not a compile error, so it only surfaced after everything else
+    compiled clean. Fixed with real definitions (matching the excluded
+    file's own initial values) added to `hud.cpp`, which already hosts this
+    tree's other cross-file globals (`gEngfuncs`, `gHUD`).
+  - **The mirror image of the tf_baseentity.cpp finding**: `CBasePlayer::
+    AddPoints/AddPointsToTeam/TeamID/GetGunPosition` are declared in
+    `player.h` but their *only* bodies live in `dlls/player.cpp` (server-only,
+    never compiled into the client) -- a real "undefined reference" against
+    the client's own private `CBasePlayer` vtable at final link. Unlike the
+    seven `tf_baseentity.cpp` virtuals, this direction needed a **client-only**
+    no-op (`#ifdef CLIENT_DLL`, opposite gating from everywhere else in this
+    file) so the server keeps calling its real, unmodified `player.cpp`
+    bodies -- matching `cbase.h`'s own already-established base-class
+    defaults for `AddPoints`/`AddPointsToTeam`/`TeamID` exactly. Confirmed
+    zero call sites anywhere in the vendored client tree first, so the
+    no-ops are provably dead code, not a guessed behavior.
+  - **No dlopen on PS3** (same landmine class as `input_goldsource.cpp`,
+    already excluded): `public/interface.h`/`interface.cpp` unconditionally
+    pull `<dlfcn.h>` for `Sys_LoadModule`/`Sys_GetFactory`/etc, used only by
+    the `TF15CLIENT_ADDITIONS`-gated mainui loader and the
+    `USE_PARTICLEMAN`-gated particleman loader (neither macro defined here)
+    -- confirmed by grepping the whole tree before gating. Gated on
+    `__PPU__`, keeping `InterfaceReg`/`CreateInterface()` (zero dlopen
+    dependency, and genuinely needed: `cdll_int.cpp`'s ungated
+    `EXPOSE_SINGLE_INTERFACE(CClientExports, ...)` depends on them).
+    `hud_benchtrace.cpp` had its own, unrelated, entirely dead
+    `#include <dlfcn.h>` on the non-Windows branch (zero `dl*()` calls
+    anywhere in the file -- the real hopcount/traceroute body is
+    `#ifdef _WIN32`-only) -- gated the same way.
+  - **`IGameMenuExports.h` needs `3rdparty/mainui_cpp`'s own `FontRenderer.h`**,
+    not vendored yet (that's TFC-4's job) -- real fatal "No such file" error.
+    Its only real users, `CL_LoadMainUI`/`CL_UnloadMainUI`, were already
+    `TF15CLIENT_ADDITIONS`-gated; widened that same guard to cover the
+    include and the two now-orphaned globals (`g_hMainUIModule`/`g_pMainUI`)
+    too.
+  - **Two real, minor `-Werror=write-strings` instances**, same class TFC-2
+    already fixed elsewhere: `ev_tfc.cpp`'s `const char *rgsz[4]` (was
+    `char *`, only ever assigned string literals, passed straight to a
+    `const char*` engine call) and `EV_TFC_BenchmarkWallMark`'s `name` param
+    (widened to match the `EV_TFC_DecalTrace` it forwards to verbatim).
+  - **One real, `-Werror=parentheses`-flagged operator-precedence bug found,
+    deliberately NOT fixed**: `RunEventList`'s `iparam1 & EV_TELEPORTER_ENTRY
+    | EV_TELEPORTER_EXIT` parses (`&` binds tighter than `|`) as
+    `(iparam1 & EV_TELEPORTER_ENTRY) | EV_TELEPORTER_EXIT` -- always nonzero
+    whenever `EV_TELEPORTER_EXIT` itself is nonzero, unlike every sibling
+    single-flag check in the same function. Parenthesized to match that
+    exact existing (likely-buggy) precedence rather than the probably-intended
+    "either flag" reading, to avoid silently changing gameplay behavior while
+    chasing a green build -- left as a flagged note for a real bug-fix goal,
+    not corrected here.
+
+  **HARDWARE-VALIDATED 2026-09-04, with one real crash found and fixed.**
+  First hardware run: booted to menu fine, hard-crashed the instant a listen
+  server started and the first real game frame rendered. Diagnosed with a
+  second opinion from Codex (user request, given the symptom's similarity to
+  CS-5) plus a live UDP log capture -- both independently converged on the
+  same root cause, fully traced before fixing (not guessed):
+  `ev_tfc.cpp`'s `RunEventList()` unconditionally dereferenced `gpGlobals`,
+  a pointer only ever assigned inside `HUD_InitClientWeapons()` -- reachable
+  only through `HUD_WeaponsPostThink()`, itself only called when
+  `cl_lw->value` is true. PS3 permanently forces `cl_lw` to `"0"`
+  (read-only, `common/defaults.h`) -- a deliberate goal-10 fix for a *worse*
+  bug (client weapon prediction hard-locking the console). So `gpGlobals`
+  never initializes on this platform, and `HUD_DrawTransparentTriangles`
+  (a required export, called every frame regardless of `cl_lw`) crashes on
+  the very first frame that reaches it -- exactly "menu fine, dies entering
+  a real game," and not a TFC-3 regression: this is a latent bug in
+  tf15-client's own code, never exercised against a `cl_lw=0` configuration
+  before. Fixed with a null-guard at `RunEventList()`'s entry, matching a
+  defensive idiom this same SDK already uses elsewhere for this exact
+  pointer (`input_goldsource.cpp`'s `if ( gpGlobals && ... )`) -- skipping
+  event-list processing without a valid clock is correct behavior, not just
+  crash-avoidance, since client weapon prediction is permanently off here
+  anyway. **Confirmed live via UDP log**: rebuilt, redeployed, listen server
+  on `2fort` loaded, player spawned and joined a team, sustained real
+  in-game rendering (~4500+ frames, steady 60fps, growing entity counts) for
+  about a minute of play with zero crash, ending in a clean player-initiated
+  XMB-exit shutdown.
+
+  Player spawned with no weapons -- **expected, not a new bug**: TFC assigns
+  a loadout through class selection, which is VGUI1 UI, entirely stubbed out
+  until TFC-5 lands. No class is ever selected server-side, so no weapons
+  are ever given. Team name also shows as empty (`TeamID()` is one of this
+  goal's client-only no-op stubs) for the same reason.
+- **TFC-4: menu module -- HARDWARE-VALIDATED 2026-09-05.** Vendored
+  `Velaron/mainui_cpp@489b8d14dfb44e2662027adf653d3a7e015e0026` (branch
+  `tf15-client`, the exact commit tf15-client's own `.gitmodules` pins) at
+  `tf15-client/3rdparty/mainui_cpp/`, plus its nested `miniutl` submodule
+  (`FWGS/miniutl@66bb8ce932649907a33007b89c09deb30cebd49e` -- confirmed via
+  the GitHub API to be a **different** pin than `3rdparty/mainui_cs`'s own
+  `miniutl` copy (`048a416`), so vendored as its own copy rather than shared,
+  same reasoning CS-3 already used). New `tf15-client/3rdparty/mainui_cpp/
+  wscript` is plain `3rdparty/mainui/wscript` verbatim (this fork needs none
+  of `3rdparty/mainui_cs/wscript`'s extra CS-only pieces). Same `__PPU__` ->
+  `XASH_PS3` patch as the other two vendored `build.h` snapshots applied to
+  `sdk_includes/public/build.h`. Root `wscript`'s `menu` SUBDIRS trio is now
+  `3rdparty/mainui` (default), `3rdparty/mainui_cs` (`cstrike`),
+  `tf15-client/3rdparty/mainui_cpp` (`tfc`) -- also fixed a stale comment
+  near `PS3_GAME_DEFINES` that still said TFC's server/client swap "lands in
+  a later goal" after TFC-2/TFC-3 had already landed it.
+
+  Confirmed by diff against `3rdparty/mainui`'s copy that this fork adds no
+  team/class/HUD windows (no `interface.cpp`, no `menus/client/`,
+  `exports.txt` is the same vanilla 2-line `GetMenuAPI`/`GetExtAPI`) -- it is
+  a light divergence from FWGS master (font-backend tweaks, an
+  `sdk_includes` sync, some `mathlib.h` trims, and one real feature: a
+  `menus/ServerBrowser.cpp` change adding a "legacy" (GoldSrc protocol 48)
+  server tag/sort). So this goal covers only swapping in TFC's own
+  upstream-intended main/pause menu module -- it does **not** solve the
+  VGUI1 problem below.
+
+  **Real finding, left deliberately unaddressed**: `tf15-client/cl_dll/
+  cdll_int.cpp`'s `#ifdef TF15CLIENT_ADDITIONS` block (still never defined)
+  dlopens a separate `menu.so`/`menu.dll` at runtime
+  (`Sys_LoadModule`/`Sys_GetFactory`) to pull a `GameMenuExports001`
+  interface out of it -- the same shape CS uses, but CS instead resolves it
+  through the engine's `gMobileEngfuncs->pfnGetNativeObject("MenuFactory")`
+  native-object lookup with no `dlopen` at all
+  (`cs16-client/cl_dll/cdll_int.cpp`'s `GetNativeMenuExports`). Checked the
+  actual vendored commit before assuming anything: it implements no such
+  interface at all (no `interface.cpp`, no `menus/client/`), so
+  `CL_LoadMainUI` would return a null factory even on the platforms it was
+  written for -- combined with PS3 having no `dlopen` (`public/interface.cpp`'s
+  `Sys_LoadModule`/`Sys_GetFactory` are already `__PPU__`-compiled-out per
+  TFC-3), defining `TF15CLIENT_ADDITIONS` here would only add dead code.
+  **Left undefined, exactly as TFC-3 left it.** If TFC-5 ever needs a real
+  menu-factory bridge, follow CS's native-object pattern, not this one.
+  `tf15-client/cl_dll/IGameMenuExports.h`'s hardcoded
+  `#include "../3rdparty/mainui_cpp/font/FontRenderer.h"` is exactly why this
+  fork was vendored at `tf15-client/3rdparty/mainui_cpp/` rather than a
+  top-level `3rdparty/mainui_tfc` -- that path resolves for free, matching
+  tf15-client's own original submodule layout, no source patch needed.
+
+  **One real build bug found and fixed, first Docker attempt**:
+  `sdk_includes/common/xash3d_types.h:179`'s `LittleFloat()` -- the
+  `#if XASH_BIG_ENDIAN` arm -- was declared `_inline float LittleFloat(...)`,
+  not `inline`. `_inline` is an MSVC-only keyword; nothing in this tree
+  `#define`s it for GCC/Clang, confirmed by grepping the whole vendored tree
+  (exactly one occurrence). This snapshot of `xash3d_types.h` is old enough
+  that `3rdparty/mainui`'s own copy (a much later FWGS revision) has already
+  replaced this whole codepath with `Swap32`/`Swap16`-based macros and no
+  `LittleFloat` function at all -- so this bug is unique to tf15-client's
+  older pinned fork, not something the vanilla-mainui precedent would have
+  caught. It never surfaced on any of this fork's original little-endian
+  targets (x86, ARM) because `XASH_BIG_ENDIAN` is never true there, so the
+  broken arm was dead code -- PS3 is the first big-endian, non-MSVC target to
+  actually compile it. Fixed by changing `_inline` to plain `inline`: the
+  file is C++-only here (every include site across the vendored tree is a
+  `.cpp`), so this is valid and behavior-preserving, not a workaround.
+  `EBOOT.pkg` after the fix: 3,463,152 bytes (~3.46MB), a sane bump from
+  TFC-3's ~3.36MB.
+
+  **Second real bug, found on real hardware**: the menu booted and hosting
+  still worked, but every localized string showed as its raw token
+  (`GameUI_Multiplayer`, `GameUI_Options`, etc) instead of real text.
+  `MenuStrings.cpp`'s `Localize_AddToDictionary` reads `resource/*_english.txt`
+  files, which are UTF-16LE on disk (BOM `0xFFFE`) -- this fork's copy reads
+  each 16-bit code unit in host byte order with **no byteswap at all**, unlike
+  `3rdparty/mainui`'s own (much newer) copy, which already has a
+  `ByteSwapUTF16File`/`XASH_BIG_ENDIAN` fix for exactly this. On a
+  little-endian host that is a no-op; on PS3 it corrupts every character,
+  `COM_ParseFile`'s very first token check (`"lang"`) fails, and
+  `Localize_AddToDictionary` bails via `goto error` before inserting a single
+  token -- so `L()` falls back to the raw token for the *entire* dictionary,
+  matching the reported symptom exactly (not a few missing strings, all of
+  them). Fixed with a small `ByteSwapUTF16File` helper in `MenuStrings.cpp`
+  that reuses `LittleShort()` (already defined in this fork's own
+  `xash3d_types.h`, a no-op on little-endian hosts and a real swap on
+  big-endian ones) per UTF-16 code unit, called on the buffer past the 2-byte
+  BOM for exactly the count the existing `Q_UTF16ToUTF8` call already uses --
+  no new global symbol, no dependency on the newer `Swap16` macro
+  `3rdparty/mainui`'s copy has that this older snapshot lacks. Rebuilt clean;
+  `EBOOT.pkg`: 3,463,136 bytes. **Confirmed on real hardware 2026-09-05**:
+  localized menu text now renders correctly (no more raw `GameUI_*` tokens);
+  listen-server hosting, already working before this fix, was undisturbed.
+
+  **TFC-4 closed.**
+- **TFC-5, real VGUI1 UI -- CLOSED, HARDWARE-VALIDATED 2026-09-05.** Chose
+  option (a) from the two considered: ported
+  `FWGS/openvgui` (`1b89d197c`, the widget toolkit) + `Velaron/vgui_support`
+  (`4574947`, tf15-client's own fork of the engine-glue library) rather than
+  writing custom non-VGUI chrome from scratch -- this reuses tf15-client's
+  own already-vendored `vgui_TeamFortressViewport.cpp`/`vgui_ClassMenu.cpp`/
+  `vgui_ScorePanel.cpp`/etc (TFC-3 left all of it `#if USE_VGUI`-gated,
+  never defined) almost as-is instead of reimplementing the same feature set
+  against a different UI mechanism. Vendored at
+  `tf15-client/3rdparty/vgui_dll/` and `tf15-client/3rdparty/vgui_support/`
+  (plus each one's own nested dep, `FWGS/MiniUTL` and `FWGS/vgui-dev`),
+  built as plain waf `stlib`s linked into `tf15-client/cl_dll`'s own
+  `client` target -- **not** a `--static-linking=` reloc module, confirmed
+  load-bearing: `VGui_LoadProgs()` (`engine/client/vgui/vgui_draw.c`) always
+  looks up the literal string `"libvgui_support.so"` for its external-library
+  attempt, which can never match a bare `--static-linking` name on this
+  no-dlopen port, so it always falls through to probing `client.dll` itself
+  for an exported `InitVGUISupportAPI` -- meaning `vgui`/`vgui_support` had
+  to be part of the `client` module itself. `Velaron/vgui_support` already
+  ships an `#ifdef INTERNAL_VGUI_SUPPORT` mode that renames its entry point
+  to exactly this symbol, so no new mechanism was invented, just wired up.
+  `tf15-client/cl_dll/exports.txt` needed exactly one new line
+  (`InitVGUISupportAPI`) -- missing it fails silently (`gViewPort` stays
+  `NULL` forever, TFC-3's exact prior symptom), not with a load error.
+
+  One real, one-field ABI drift found and patched:
+  `tf15-client/engine/vgui_api.h` (a stale vendored copy of the real
+  `engine/vgui_api.h`) had `void (*Unused)(void)` where the real header has
+  `void (*EnableTextInput)(qboolean,qboolean)` at the same struct offset --
+  same pointer size so not a live bug (nothing called the field either way),
+  patched to match anyway. Confirmed via a live diff against the two openvgui-
+  family header sets (`vgui_dll/include` vs `vgui_support/vgui-dev/include`)
+  that they are byte-identical bar one harmless commented-out line, so
+  compiling the two modules against their own separate copies (matching
+  upstream's own CMakeLists.txt, which never cross-references them) carries
+  no real divergence risk.
+
+  Five real bugs found and fixed getting to a clean build, all in code that
+  had simply never been compiled before (TFC-3's `#if USE_VGUI` gate meant
+  none of this had ever seen this project's `-Werror` set until now):
+  1. `vgui_dll/src/vgui/String.cpp`'s default constructor did
+     `_text="";` (`char*` from a literal) -- fixed to heap-allocate an empty
+     buffer instead, matching the class's own parameterized-constructor
+     pattern, not a const_cast.
+  2. Several GoldSrc-era `char*`/`char*[]` declarations that are only ever
+     read from, never mutated, hit the same `-Werror=write-strings` once
+     literals reached them for the first time: `vgui_ClassMenu.cpp`'s
+     `cText`, `vgui_ServerBrowser.cpp`'s `DoSort()`/`CSBLabel` constructor,
+     `vgui_TeamFortressViewport.h`'s `CMenuHandler_StringCommand` family (3
+     classes, 6 constructors) and `CreateCommandMenu`, and four file-scope
+     tables (`sArrowFilenames`, `sTFClasses`, `sLocalisedClasses`,
+     `sTFClassSelection` -- the last two also needed their `extern`
+     declarations in the header updated to match). Each was verified
+     read-only against every real call site before retyping to `const
+     char*`, not blindly retyped.
+  3. `vgui_ScorePanel.cpp`'s `SBColumnInfo::m_pTitle` (same class, same
+     fix) plus a real `sprintf( sz, "" )` zero-length-format-string error,
+     fixed to a plain `sz[0]='\0'` (identical behavior).
+  4. **The real cross-file one**: `hud.cpp` had defined `g_iPlayerClass`/
+     `g_iTeamNumber`/`g_iUser1`/`g_iUser2`/`g_iUser3` as a TFC-3-era stopgap
+     (their real upstream owner, `vgui_TeamFortressViewport.cpp`, was
+     excluded at the time) -- once TFC-5 un-excluded that file, both TUs
+     defined the same five globals, a real `multiple definition` link
+     error. Removed hud.cpp's stopgap copies, restoring
+     `vgui_TeamFortressViewport.cpp` as sole owner (genuine upstream
+     layout, not a new pattern).
+
+  `EBOOT.pkg`: 3,661,616 bytes (~3.49MB), a modest bump from TFC-4's
+  ~3.46MB -- plausible, not alarming: only the openvgui widgets TFC's own
+  `vgui_*.cpp` actually reference get pulled into the final static link via
+  normal archive-member selection, not the whole ~15,600-line toolkit.
+
+  **HARDWARE-VALIDATED 2026-09-05, goal closed.** First hardware round hit a
+  real crash (exit to XMB on connect) -- root-caused (with a Codex second
+  opinion, both independently converging on the same call site) to
+  `vgui_dll/src/vgui/DataInputStream.cpp` reading every multi-byte TGA
+  header field as a raw memcpy with no byteswap, corrupting
+  `BitmapTGA::loadTGA`'s width/height on this big-endian target and driving
+  an unchecked `new uchar[wide*tall*4]`. Fixed there and in a second,
+  independent instance of the identical pattern in the bitmap-font loader
+  (`src/platform/posix/fileimage.cpp`'s `Load32BitTGA`). Second hardware
+  round: crash gone, MOTD panel displayed, but CROSS couldn't click "OK" --
+  two more real, confirmed bugs, both in `engine/platform/ps3/in_ps3.c`:
+  (1) `Platform_SetCursorType()` had no real PS3 implementation at all (fell
+  through to the universal no-op stub in `platform.h`), so the stick-driven
+  cursor only ever activated for the native menu (`key_dest==key_menu`),
+  never for a VGUI1 panel floating over live gameplay -- added a real
+  implementation and widened `PS3_CursorVisible()`/`PS3_UpdateMenuCursor()`
+  to also check it; (2) CROSS's simulated click routed through
+  `Key_Event(K_MOUSE1, ...)`, which only ever reaches the engine's
+  `VGui_KeyEvent()` -- VGUI1's own button-click activation
+  (`App::internalMousePressed`) is driven exclusively by the separate
+  `IN_MouseEvent()` -> `VGui_MouseEvent()` path, so the cursor could reach
+  the button but never activate it. Fixed by calling `IN_MouseEvent(0, ...)`
+  instead. Third hardware round confirmed: MOTD closes correctly. TFC-5's
+  own scope -- a working classic-VGUI1 client bridge -- is done.
+
+  **New, separate finding, explicitly deferred, not part of TFC-5's own
+  scope**: hosting a listen server locally is broken two ways --
+  (a) the host's own player is stuck as spectator forever, no team/class/
+  weapons/armor, and (b) other players cannot connect to the hosted server
+  at all. (a) has two confirmed, real, fixable causes: `tf_gamerules.cpp`'s
+  `CTeamFortress::InitHUD` never sends the `gmsgVGUIMenu` message that would
+  open team-select (registered in `player.cpp` but never actually written
+  anywhere in the vendored `tf15-client/dlls` tree), and separately no PS3
+  gamepad button is bound to `"special"` (`hud.cpp`'s `HOOK_COMMAND`), the
+  vanilla F4-equivalent that opens it manually -- every physical DS3 button
+  is already claimed by something else in `engine/client/input/in_keys.c`'s
+  default table. (b) is still unexplained: a promising GoldSrc-protocol
+  checksum-munge theory (the server-side forward `COM_Munge3` exists only in
+  test code, never a real build) was investigated and **ruled out** --
+  confirmed via `cl_main.c:1323` that this connection type negotiates the
+  native Xash protocol, never touching that code path at all. Needs a real
+  hardware round with a second client actually attempting to connect, log
+  captured live, before a next theory is worth chasing. Tracked as its own
+  goal below (TFC-6) rather than reopening TFC-5.
+- **TFC-6, listen-server hosting is broken**: Phase 1 in progress
+  (2026-09-05). Two independent symptoms:
+
+  **6a. Host's own player never gets a real team/class.** The earlier "two
+  tiny fixes" read (missing `gmsgVGUIMenu` send + missing `"special"` bind)
+  was WRONG -- re-investigated this session with a fresh Codex second
+  opinion, both converged. The real cause: `tf15-client/dlls/` is a
+  near-empty TFC server skeleton. `demoman.cpp`/`dispenser.cpp`/
+  `engineer.cpp`/`pyro.cpp`/`sentry.cpp`/`spy.cpp`/`teleporter.cpp`/
+  `tf_item.cpp`/`tf_sbar.cpp`/`tf_admin.cpp`/`tf_wpn_grenades.cpp`/
+  `areadef.cpp` are all **0-byte files**. `tf_gamerules.cpp` is 234 lines of
+  thin shell. No `tf_client.cpp` equivalent exists. `gmsgVGUIMenu` is
+  registered (`player.cpp:265`) but never `MESSAGE_BEGIN`'d anywhere.
+  `CTeamFortress::ClientCommand` (`tf_gamerules.cpp:55`) just forwards to
+  `CHalfLifeTeamplay::ClientCommand`, whose only game command is an empty
+  `menuselect` stub -- so the client's `jointeam N` (from
+  `vgui_teammenu.cpp:128`) and its bare class commands `scout`/`sniper`/
+  `soldier`/`demoman`/`medic`/`hwguy`/`pyro`/`spy`/`engineer`/`randompc`/
+  `civilian` (from `sTFClassSelection[]`, `vgui_TeamFortressViewport.cpp:132`,
+  sent via `pfnClientCmd`) all fall through to "Unknown command". `"special"`
+  sends `_special` to the server (not a direct menu open) -- also unhandled.
+  Base `CHalfLifeTeamplay::InitHUD` manufactures a generic model-string team
+  but never sets TFC's numeric `team_no`/`pev->team`. The "spectator" look is
+  `team_no==0`/`playerclass==0`, not necessarily a live `StartObserver`
+  state (`ClientPutInServer` zeros `iuser1`). `CTeamFortress::PlayerSpawn`
+  grants only the suit bit. Weapon subsystem is also holed independent of
+  the menu: `CTFNailgunNail`/`CTFRpgRocket`/`CTFGrenade`/pipebomb projectile
+  spawning is commented out or returns null (`tf_wpn_ng.cpp:74`,
+  `tf_wpn_nails.cpp`, `tf_wpn_gl.cpp:159`), RPG fire calls a null factory.
+  Many `player.h` `TeamFortress_*` decls (`TeamFortress_TeamSet`,
+  `TeamFortress_SetEquipment`, `TeamFortress_CheckClassStats`, ...) have NO
+  definition anywhere (dead decls, no link error). Base `CGrenade`
+  (`ggrenade.cpp`, bounce/timed/contact) and the 12 non-empty
+  `wpn_shared/tf_wpn_*.cpp` fire-timing shells DO exist as a foundation.
+
+  No GoldSrc TFC server DLL exists to vendor (checked: Valve never released
+  `tfc/`; `eukara/freetfc` is a QuakeC clean-room rebuild, behavior
+  reference only, not portable code; `Velaron/tf15-client` upstream has no
+  server plans, last commit Aug 2025). So 6a is a from-scratch C++
+  reimplementation of TFC gameplay. User approved a **full playable pass**
+  (2026-09-05), delivered in HW-gated phases:
+  - **Phase 1 -- WRITTEN 2026-09-05, awaiting build + HW test.** New
+    `dlls/tf_client.cpp` (~415 lines): default Blue/Red team model, the
+    `gmsgTeamNames`/`gmsgValidClasses`/`gmsgVGUIMenu` sends, `jointeam` /
+    bare class-name / `_special` / `changeteam` / `changeclass` command
+    handlers, a class-stat/loadout table generated straight off tf_defs.h's
+    `PC_*` constants (`TFCLASSROW` macro), and team-aware
+    `info_player_teamspawn` selection with a DM/start fallback. Wired in via
+    `tf_gamerules.{h,cpp}` (InitHUD now calls `CHalfLifeMultiplay::InitHUD`
+    not `CHalfLifeTeamplay::`, plus 5 new virtual overrides:
+    `GetPlayerSpawnSpot`/`SetDefaultPlayerTeam`/`GetTeamIndex`/
+    `GetIndexedTeamName`/`IsValidTeam`), `client.cpp` `AddToFullPack` (set
+    `state->team` + `state->playerclass` for players, both were absent),
+    `subs.cpp` (`LINK_ENTITY_TO_CLASS(info_player_teamspawn, CPointEntity)`),
+    `exports.txt` (+`info_player_teamspawn`), `tf_defs.h` (8 free-fn decls).
+    No wscript change -- `dlls/wscript` globs `**/*.cpp`. Known Phase-1
+    simplifications: no-class players are frozen `MOVETYPE_NONE`+`EF_NODRAW`
+    (no real observer cam); class change is a clean strip+respawn (no death/
+    frag penalty); no team colours on the player model; medic bio-weapon and
+    medikit ammo skipped; projectile/grenade weapons are granted but inert
+    until Phase 2/3. Result once tested: menus work, hitscan classes
+    (sniper/hwguy/scout/medic/pyro/spy) playable.
+    - **HW round 1 (2026-09-05): partial.** Team spawns correct (red spawns
+      for red, blue for blue -- `info_player_teamspawn`/`team_no` verified
+      right), class health + speed correct (so `TeamFortress_PlayerSpawn`
+      and the `TFCLASSROW` table are sound). BUT no weapons and (reported)
+      no armor. **Weapons root cause: all 18 `tf_weapon_*` classnames were
+      missing from `dlls/exports.txt`** -- the original list was grepped from
+      `dlls/*.cpp` only and never covered `wpn_shared/`. On this no-dlopen
+      static-link build `CREATE_NAMED_ENTITY` (used by both `GiveNamedItem`
+      at spawn AND `W_Precache`/`UTIL_PrecacheOtherWeapon` at map load)
+      returns NULL for an unlisted classname -> "NULL Ent in
+      GiveNamedItem". Fixed: 18 names added to exports.txt (matches
+      `weapons.cpp` `W_Precache`'s list exactly). Weapon models/sounds/events
+      ARE all precached at map load by `W_Precache()` (world.cpp:556), so
+      late-precache Host_Error is not a risk. Armor: `ci->initarmor` is a
+      compile-time constant from the same struct as health, so it must be
+      applying -- likely the tested class was sniper (INITARMOR 0, correct)
+      or a client HUD display gap; a diagnostic `ALERT` line now prints
+      `hp/spd/armor/weapbits/active-weapon` per class spawn. Retest pending.
+    - **HW round 2 (2026-09-05): still no weapons/armor, + healthkits don't
+      heal.** exports.txt fix confirmed necessary but not sufficient. A fresh
+      Codex consult (thread `a2574cb8...`, big-endian was the user's
+      hypothesis -- **ruled out**) found THREE independent pre-existing
+      tf15-client bugs, all verified against source:
+      1. **Weapons: TFC weapon `Spawn()` never calls `FallInit()`/
+         `SetTouch()`** (`wpn_shared/tf_wpn_sg.cpp:15`, `tf_wpn_axe.cpp:14`,
+         all of them -- just `Precache()` + `pev->solid=SOLID_TRIGGER`). So
+         `GiveNamedItem`'s simulated `DispatchTouch` hits a NULL `m_pfnTouch`
+         and the weapon is never added. Fix: `TeamFortress_GiveWeapons` now
+         uses `CBaseEntity::Create` + `pPlayer->AddPlayerItem` +
+         `AttachToPlayer` directly (the `CWeaponBox` give pattern,
+         `weapons.cpp:1304`), not `GiveNamedItem`.
+      2. **Armor HUD: `gmsgBattery` registered 4 bytes** (`player.cpp:221`),
+         client `MsgFunc_Battery` reads 2 shorts (`cl_dll/battery.cpp:61`),
+         server sent only 1 short (`player.cpp:4005`). Engine drops
+         fixed-size messages with the wrong length outright
+         (`sv_game.c:2670`, "expected 4 bytes, it written 2. Ignored"), so
+         the armor HUD never activated. Fix: send the second short
+         (`maxarmor`) in `player.cpp`.
+      3. **Items: `CTeamFortress::CanHaveItem` returned
+         `ActivationSucceeded(...)`** (`tf_gamerules.cpp:151`), an unfinished
+         stub that always returns FALSE (`tfortmap.cpp:9`), blocking every
+         `item_healthkit`/`item_battery`/ammo pickup at `items.cpp:121`. Fix:
+         fall back to `CHalfLifeMultiplay::CanHaveItem` (TRUE). `gSkillData`
+         IS populated (`gamerules.cpp:179-181` hardcodes battery=15,
+         healthkit=25 + `RefreshSkillData()` from the mp ctor) -- so
+         healthkits heal 25 once the gate is fixed.
+      Also fixed: railgun `Spawn()` set its classname to `" tf_weapon_railgun"`
+      with a leading space (`tf_wpn_railgun.cpp:17`). Diagnostics in
+      `tf_client.cpp` switched from `ALERT` (dropped at developer 0) to
+      `pfnServerPrint` (`Con_Printf`, always logs) -- `[tfc]` lines per
+      join/class/spawn/weapon-give.
+    - **HW round 3: weapons + armor + ammo HUD all now WORK on screen**
+      (`[tfc] PlayerSpawn done: ... got armor=150 carried=4
+      active=tf_weapon_shotgun`, HW-confirmed). The 3 Codex fixes hold.
+      Remaining: **weapons don't fire.** `wpn_shared/tf_wpn_*` weapons have
+      never run server-side before (tf15-client only connected to real
+      servers). Static trace inconclusive: the decrement-timer model
+      (`UTIL_WeaponTimeBase()`==0 under `CLIENT_WEAPONS`, `player.cpp`
+      PostThink decrements `m_flNextPrimaryAttack` per frame, `CanAttack`
+      checks `<=0`) looks self-consistent server-side; `FireBulletsPlayer`
+      deals real damage on the shotgun's `iDamage=4` path. `PLAYBACK_EVENT`s
+      use `FEV_NOTHOST` so a non-predicting listen host (`cl_lw=0` on PS3)
+      sees no muzzle *event* -- but server-side `EF_MUZZLEFLASH`/decals/
+      damage should still land. Added fire-path diagnostics in `weapons.cpp`
+      + `player.cpp ItemPostFrame`: `[tfc] fire <w>` (PrimaryAttack reached),
+      `[tfc] fire BLOCKED` (CanAttack failed), `[tfc] ItemPostFrame gated`
+      (`m_flNextAttack` stuck), `[tfc] ItemPostFrame: no active item`,
+      silence = button never reaches the server.
+    - **HW round 4 (2026-09-05): healthkits heal (CanHaveItem fix
+      HW-confirmed). Weapons still don't fire -- ROOT CAUSE FOUND.**
+      Diagnostic: `[tfc] fire tf_weapon_shotgun clip=-1`. `PrimaryAttack` IS
+      reached (button + CanAttack fine), but `m_iClip == -1` so
+      `CTFShotgun::PrimaryAttack`'s `if (m_iClip <= 0) { Reload(); ... }`
+      loops forever without firing. `m_iClip` was forced to -1 by
+      `AddPrimaryAmmo` (`weapons.cpp:821`, `if (iMaxClip < 1) m_iClip = -1`)
+      because `ItemInfoArray[WEAPON_TF_SHOTGUN].iMaxClip == 0`. That is 0
+      because `UTIL_PrecacheOtherWeapon` (`weapons.cpp:272`) called
+      `pEntity->Precache()` -- NOT `Spawn()` -- and the TFC weapons set
+      `m_iMaxClipSize` (which `GetItemInfo` returns as `iMaxClip`) only in
+      `Spawn()`, never `Precache()`. Base HL weapons return a hardcoded
+      constant from `GetItemInfo` so they're immune. Fix: `UTIL_PrecacheOtherWeapon`
+      now `DispatchSpawn(pent)` instead of `Precache()` so the clip-size
+      members are set before `GetItemInfo` snapshots them. Affects the
+      shotgun + supershotgun (the only TFC clip weapons); nailgun/axe are
+      correctly noclip.
+    - **HW round 5 (2026-09-05): shotgun FIRES (`[tfc] fire ... clip=8 ->
+      2 -> 0`), but reload + weapon-switch dead, firing timing wrong
+      (`nextprim` stuck ~0.98, never counts down).** Root cause:
+      `CBasePlayerWeapon::UseDecrement()` was hardcoded `return FALSE`
+      (`weapons.h:235`). The `wpn_shared/tf_wpn_*` weapons use ONLY the
+      relative decrement-timer model -- `Reload()`/`WeaponIdle()`/switch
+      checks all compare `m_flNextPrimaryAttack` & friends to `0.0f`, and
+      `UTIL_WeaponTimeBase()` is 0 under `CLIENT_WEAPONS`. Those timers are
+      decremented only when `UseDecrement()` is TRUE (`player.cpp` PostThink,
+      `client.cpp` GetWeaponData). FALSE -> firing half-works (`CanAttack`
+      falls back to `attack_time <= gpGlobals->time`) but every `<= 0.0f`
+      gate stays shut forever. `CHandGrenade` already overrides
+      `UseDecrement()` to `#if CLIENT_WEAPONS return TRUE`. Fix: same body on
+      base `CBasePlayerWeapon::UseDecrement()`.
+    - **HW round 6 (2026-09-05): shotgun fires one-per-pull, clip decrements
+      right, `nextprim` counts down (UseDecrement fix works). Reload still
+      dead + weapon-switch dead.** Two more bugs:
+      1. **`m_flNextReload` decremented on the CLIENT
+         (`cl_dll/tfc/tf_weapons.cpp:1117`) but NOT in the server PostThink
+         decrement loop** (`player.cpp:2665` had NextPrimary/Secondary/
+         TimeWeaponIdle/fuser1, not NextReload). tf_wpn_sg/gl/rpg
+         special-reload sets `m_flNextReload = m_fReloadTime` then gates the
+         next state on `m_flNextReload <= 0.0f` -> never true server-side ->
+         clip never refills. Fix: decrement `m_flNextReload` too (clamp
+         -0.001f).
+      2. **`client.cpp:597` weapon-select only matched a command that starts
+         with `weapon_`** (`pstr == pcmd`); TFC's client sends `tf_weapon_ng`
+         -> "Unknown command". Fix: also accept the `tf_weapon_` prefix.
+      `m_flPumpTime` decrement still commented out (`player.cpp:2679`) ->
+      shotgun pump anim won't play; cosmetic, left alone.
+    - **HW round 7 (2026-09-10): reload + weapon-switch + nailgun all work.
+      Only bug left: HUD reserve ammo count frozen (clip count is fine).**
+      The `tf_wpn_*` weapons drain the scalar `ammo_shells`/`ammo_nails`/etc
+      (`cbase.h` members), but the HUD reserve is `gWR.riAmmo[]` fed by
+      `gmsgAmmoX` from `CBasePlayer::SendAmmoUpdate()`, which only watches
+      `m_rgAmmo[]`. Nothing synced the two. Fix: `TeamFortress_SyncAmmo()`
+      (`tf_client.cpp`) mirrors the 4 scalars into
+      `m_rgAmmo[GetAmmoIndex(...)]` every frame, called from a new
+      `CTeamFortress::PlayerThink` override (runs in PreThink, before
+      `UpdateClientData`). One-way -- fine until a phase adds ammo pickups
+      that write `m_rgAmmo` directly. `cd->ammo_shells` in the
+      `UpdateClientData` export is still unset (matters only for a remote
+      predicting client, not the PS3 host).
+    - **HW round 8 (2026-09-10): hitscan classes fully playable. User flagged
+      assault-cannon speed wrong.** `CBasePlayer::TeamFortress_SetSpeed()`
+      (`player.cpp:421`) was an empty stub, so AC wind-up / sniper zoom
+      (`tfstate |= TFSTATE_AIMING`) never dropped movement speed to 80. The
+      client copy (`cl_dll/tfc/tf_weapons.cpp:521`) is complete but never
+      runs the local player's real movement under `cl_lw=0`. Fix: port the
+      client version to the server (class-base speed switch + the
+      `TFSTATE_AIMING -> 80` clamp + `pfnSetClientMaxspeed`).
+      `TeamFortress_PlayerSpawn` now calls `TeamFortress_SetSpeed()` instead
+      of setting `pev->maxspeed` directly. Retest pending.
+  - **Phase 2**: hand grenades + the class grenade-2 types, built on
+    `CGrenade`. Split 2a/2b (user-approved 2026-09-10). Only 7 grenade-2 types
+    exist here -- `GR_TYPE_FLASH`/`GR_TYPE_FLARE` are commented out in
+    `tf_defs.h`.
+    - **Phase 2a -- WRITTEN 2026-09-10, awaiting build + HW.** Prime/throw
+      pipeline + the normal grenade + per-class counts + HUD count + L1/R1
+      binds. New `dlls/tf_grenade.cpp` (`CTFGrenade : CGrenade`,
+      `tf_weapon_normalgrenade`; real `TeamFortress_PrimeGrenade` /
+      `ThrowPrimedGrenade` / `RemoveLiveGrenades`; `TFGRENROW` loadout table
+      off `PC_*_GRENADE_TYPE/INIT_1/2`; `gmsgGrenades` HUD count -- per-index
+      2-byte msg, one send per slot; `gmsgStatusIcon` `"grenade"` prime beep;
+      `TeamFortress_GrenadeCommand` handling `+gren1/-gren1/+gren2/-gren2`
+      forwarded from the engine). `TF_GREN_FUSE` = `GR_PRIMETIME+1` (~4s from
+      prime); held past the fuse blows in hand (`TeamFortress_GrenadeThink`
+      from `PlayerThink`). Edits: `tf_client.cpp`, `tf_gamerules.cpp`,
+      `player.h` (+2 members), `tf_defs.h` (+4 decls), `exports.txt`
+      (+`tf_weapon_normalgrenade`). Engine: `in_ps3.c PS3_SeedKeyboardBinds`
+      `is_tfc` -> `PS3_ModRebind` L1->`+gren1`, R1->`+gren2`. No wscript
+      change. Models/sounds already precached by `W_Precache`.
+    - **Phase 2b -- WRITTEN 2026-09-10 (pulled forward, same round as 2a per
+      user), awaiting build + HW.** All 7 grenade-2 types in `tf_grenade.cpp`:
+      one `CTFGrenade` class (7 classnames) with an `m_iGrenType` switch in
+      `TFDetonate` -- concussion (view wobble via `gmsgConcuss`, ~0 dmg),
+      MIRV (`GR_TYPE_MIRV_NO` child `CTFGrenade`s), napalm (`DMG_BURN` blast +
+      a server DoT loop), gas (green `UTIL_ScreenFade` + weak wobble), EMP
+      (blast + detonate/zero victims' shells/cells/rockets), nail (lands, spins
+      `MOVETYPE_NONE`, `RadiusDamage` pulses for `TF_NAIL_LIFETIME`). Scout's
+      caltrop grenade (`GR_TYPE_CALTROP`, on `+gren1`) scatters
+      `TF_CALTROP_SHARDS` `CTFCaltrop` `SOLID_BBOX` shards that slow + bleed
+      the first enemy to touch. Own tumble think (`TFTumble`) -- `CGrenade::
+      TumbleThink` hard-codes `SetThink(&CGrenade::Detonate)` (the OpFor-rune
+      non-virtual-base trap) so it would skip the type effect. Lingering
+      effects (conc/gas wobble, burn DoT, caltrop slow) tracked on 8 new
+      `player.h` fields, ticked from `TeamFortress_GrenadeThink`. **Approximated,
+      not faithful**: TFC's flame / hallucination / timer subsystems are all
+      empty stubs in this tree (`subs.cpp` `Timer_*`, `CBasePlayer::Ignite`
+      declared-only). The `TeamFortress_TakeConcussionBlast` / `EMPExplode` /
+      etc virtuals are left as the `#ifndef CLIENT_DLL {}` no-ops -- effects
+      applied directly in the grenade's detonate instead. All 10 grenade
+      classnames added to `exports.txt`. Tunables: the `TF_*` `#define`s at the
+      top of `tf_grenade.cpp`.
+      - **HW round 1 (2026-09-10): REGRESSION -- normal grenade stopped
+        exploding. Rewritten**: dropped the custom `EXPORT` think +
+        `m_iGrenType` switch + `GetClassPtr`; now spawn via
+        `CBaseEntity::Create(<classname>)`, one `CTFTossGrenade` base whose
+        stock-copy think calls a **virtual `Detonate2()`** at the fuse; one
+        `LINK_ENTITY_TO_CLASS` subclass per type; classname carries the type.
+      - **HW round 2: pipeline works (log confirms), but behaviour "clearly
+        wrong". Opus review -> Round A applied 2026-09-10.** Full Opus report
+        in the [[project_xashps3_tfc6_hosting_broken]] memory. Highlights:
+        `v_idlescale=3` is invisible (need ~200; `view.cpp:406`); caltrop is a
+        thrown can `tf_weapon_caltropgrenade` w/ `GR_CALTROP_PRIME` 0.5s;
+        stock `m_iConc*` + `leg_damage` + `nailpos` fields exist unused; all 10
+        FX events already `PRECACHE_EVENT`'d in `world.cpp:560` and just need
+        `PLAYBACK_EVENT_FULL`. Round A: real conc (0 dmg, conc-jump push for
+        all, disorient enemies-only, 200-start 5s ramp via stock fields),
+        caltrop can + `leg_damage` slow in `TeamFortress_SetSpeed`, per-type FX
+        events, two-pass victim gather (fixed a latent UAF).
+      - **HW rounds 3-4 (2026-09-10): pipeline + frag + caltrop + MIRV + EMP +
+        conc-in-hand all fire correctly (Scout/HWGuy tested, no errors).** Conc
+        held-in-hand fixed (was spawning `eye+forward*16` -> pushed the thrower
+        DOWN + no self-swim): now spawns at `origin.z + pev->mins.z + 4` (stand
+        OR duck hull bottom) and `TF_ConcPush` has a point-blank (`<48u`)
+        straight-up-full-strength branch. Codex 2nd opinion confirmed the
+        approach (`pev->velocity` write from PreThink IS authoritative -- see
+        the memory for the full Codex facts, incl. `cl_lw` != movement pred).
+        **User verdict: "some right, but many issues" -- not enumerated.
+        SESSION HANDOFF: see [[project_xashps3_tfc6_hosting_broken]] top of the
+        Phase 2 section. Next session: get the specific issue list first.**
+        Latest build `build_tfc/engine/EBOOT.pkg` 17:53.
+      - **Round B** (still open): nail `nailpos` directional rotation + client
+        nail event, per-tick napalm `tf_burn.sc` fire field, `no_active_*_grens`
+        caps, `DMSG_GREN_*` death messages, `tf_weapon_genericprimedgrenade`
+        in-hand model, gas hallucination, verify `v_idlescale` peak vs real TFC.
+  - **Phase 3**: projectile weapons (nailgun nails, soldier rockets,
+    demoman GL + pipebombs, incendiary, tranq darts).
+  - **Phase 4**: engineer (sentry build/aim/fire/upgrade, dispenser,
+    spanner) + spy (disguise, feign death).
+  - **Phase 5**: map goals/flags (`info_tfgoal`/`item_tfgoal`), map scripts,
+    prematch, detpack.
+
+  Phase-1 implementation notes from the Codex consult (verify each against
+  live source before relying on it): send the team menu from
+  `CTeamFortress::InitHUD` (queues correctly behind the already-visible
+  MOTD via the client's menu chain), NOT from `ClientPutInServer` (pre-HUD,
+  clobbers observer fields) or `PlayerSpawn` (fires every respawn); handle
+  `jointeam`/class/`_special` in `CTeamFortress::ClientCommand` not global
+  `client.cpp`; the team menu disables named buttons unless `gmsgTeamNames`
+  reports enough teams; `civilian` is map-forced, not player-selectable;
+  keep both the generic `m_rgAmmo` (via `GiveAmmo`) and the TFC `ammo_*`
+  fields in sync (TFC attacks read `ammo_shells` etc directly); all wire
+  shorts must go through engine `WRITE_SHORT` (client `parsemsg.cpp`
+  rebuilds LE byte-by-byte -- safe unless new code casts native ints).
+  Ranked risks: (1) team spawn-point selection (`CTFSpawn` only declared,
+  `FindTeamSpawnPoint` returns null -- inspect real BSP entity data before
+  hardcoding classnames), (2) observer/undefined-class lifecycle, (3)
+  `AddToFullPack` state-replication timing, (4) dual ammo fields + holed
+  projectile weapons, (5) `number_of_teams`/player-count/class-legality
+  stubs. Big-endian risk low for this slice.
+
+  **6b. Other players cannot connect to a PS3-hosted listen server at all.**
+  Separate bug, root cause NOT FOUND, NOT part of the Phase plan above. The
+  one lead investigated (GoldSrc checksum munge) is confirmed NOT the cause
+  (`cl_main.c:1323` -- this connection type negotiates native Xash
+  protocol). Needs real hardware data: a second real client attempting to
+  connect while the UDP log is captured live, plus whatever the connecting
+  client reports on its end (timeout / kick reason string / never appears).
+- **TFC-7**: endianness audit of TFC-specific wire/binary code (`dlls/tfc/`,
+  `cl_dll/tfc/`, sentry/dispenser networked state, `wpn_shared`) -- do not
+  assume it is safe just because it is hlsdk-lineage: cs16-client had a real
+  raw-byte-order bug in its usermessage reader that base HL1's hand-rolled
+  parser did not have (see the CS section above), so audit before trusting.
+- **TFC-8**: in-game hardware validation. Expect a CS-5-style client memory
+  ceiling during precache (nine player classes' worth of models/sounds vs
+  CS's simpler roster) and the same `XASH_64BIT` / dead-`build.h`-snapshot
+  check CS needed if tf15-client also fails to include a real `build.h`.
+
+Not yet checked in detail: `particleman` (submodule, `USE_PARTICLEMAN`-gated
+across 6 files, skippable for v1, matches CS's optional-extras precedent).
 
 ## 8. Repo layout after the 2026-08-04 cleanup
 

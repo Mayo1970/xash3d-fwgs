@@ -183,6 +183,10 @@ static void FS_FreeDirEntries( dir_t *dir )
 	{
 		for( int i = 0; i < dir->numentries; i++ )
 			FS_FreeDirEntries( &dir->entries[i] );
+		// the array itself is a single Mem_Malloc from FS_InitDirEntries; freeing
+		// only the subtrees leaks one allocation per cached directory, and
+		// FS_MergeDirEntries is the only other place that ever frees one
+		Mem_Free( dir->entries );
 		dir->entries = NULL;
 	}
 

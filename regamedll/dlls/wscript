@@ -68,6 +68,13 @@ def build(bld):
 	if bld.env.DEST_CPU in ('powerpc64', 'x86_64', 'aarch64') or bld.env.DEST_OS == 'ps3':
 		defines += ['XASH_64BIT=1']
 
+	# Same reasoning as XASH_64BIT above: nothing in this SDK includes its own
+	# public/build.h (which does define XASH_BIG_ENDIAN under __PPU__), so the
+	# .nav binary loader (game_shared/bot/nav_byteswap.h) needs this set
+	# directly rather than relying on a header nothing here includes.
+	if bld.env.DEST_OS == 'ps3':
+		defines += ['XASH_BIG_ENDIAN=1']
+
 	# No PS3_GAME_DEFINES entry is consumed here, for the same reason
 	# cs16-client/cl_dll consumes none: Counter-Strike swaps this whole source
 	# tree in instead of gating hlsdk-portable's, so a game define has nothing

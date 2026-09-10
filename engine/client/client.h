@@ -277,6 +277,7 @@ typedef struct
 	double frametime_remainder;
 
 	uint worldmapCRC;
+	qboolean worldmapCRC_valid;			// false when CRC32_MapFile failed, see CL_ParseServerData
 } client_t;
 
 /*
@@ -785,6 +786,7 @@ void CL_ProcessFile( qboolean successfully_received, const char *filename );
 void CL_WriteUsercmd( connprotocol_t proto, sizebuf_t *msg, int from, int to );
 void CL_SetupNetchanForProtocol( connprotocol_t proto );
 qboolean CL_PrecacheResources( void );
+void CL_LoadingKeepAlive( void );
 void CL_SetupOverviewParams( void );
 void CL_UpdateFrameLerp( void );
 int CL_IsDevOverviewMode( void );

@@ -1,0 +1,89 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+# TFC-5: the engine-glue half of real VGUI1 support. Vendored from
+# github.com/Velaron/vgui_support (tf15-client's own fork of
+# FWGS/vgui_support, not bare upstream -- hlsdk-portable pins bare upstream
+# separately for its own unrelated, dead prebuilt-binary VGUI path, never
+# used by this project) at the exact commit tf15-client's own .gitmodules
+# pins, 45749477424642e1dcf1ec51ab9a52d996930851. Implements
+# vgui_support::CEngineSurface/CEngineApp (vgui_main.h), subclassing
+# vgui_dll's SurfaceBase/App, and exports one entry point that wires the
+# engine's vguiapi_t table (engine/vgui_api.h) to them.
+#
+# Its own nested vgui-dev/ dependency (github.com/FWGS/vgui-dev @
+# d230fa729254bc92bb49189a5b0a871ef5417f24) supplies this module's own copy
+# of the VGUI1 headers -- confirmed byte-identical to vgui_dll's own copy of
+# the same headers bar one harmless comment-only line (VGUI_Panel.h's
+# commented-out friend declaration), so compiling against a separate copy
+# here (same as upstream's own CMakeLists.txt does -- it never references
+# vgui_dll's include path at all) carries no real ABI-divergence risk.
+# Prebuilt lib/ binaries under vgui-dev were dropped, same reasoning as
+# vgui_dll's own.
+#
+# INTERNAL_VGUI_SUPPORT is a real, upstream-supported build mode (see
+# vgui_int.cpp's own '#ifdef INTERNAL_VGUI_SUPPORT / #define InitAPI
+# InitVGUISupportAPI'), not a fork-specific patch -- it renames this
+# module's entry point to exactly the symbol
+# engine/client/vgui/vgui_draw.c's VGui_LoadProgs() looks up via
+# COM_GetProcAddress on client.dll itself when no external "vgui_support.so"
+# is found (guaranteed on this no-dlopen port: that lookup always builds the
+# literal string "libvgui_support.so", which can never match a bare
+# --static-linking reloc-module name -- so this module must be linked into
+# the client module itself, not registered as its own reloc module).
+# tf15-client/cl_dll/exports.txt must list InitVGUISupportAPI for that
+# lookup to ever succeed; missing it fails silently (gViewPort just stays
+# NULL forever), not with a load error -- see that file's own comment.
+#
+# '../../../engine' below is the REAL top-level engine/, not
+# tf15-client/engine -- the latter is a stale vendored copy of vgui_api.h
+# with a one-field name/signature drift at the same struct offset (harmless
+# today, nothing calls that field, but still patched to match separately;
+# this module must never pick up that stale copy by accident, so
+# tf15-client/engine is deliberately absent from this include list).
+# key_modifiers.h/cursor_type.h (vgui_api.h's own quoted includes) resolve
+# from the real engine/ directory automatically, same-directory rule --
+# confirmed byte-identical to tf15-client's own copies anyway. common/
+# public/dlls below are tf15-client's own (matches wrect.h's real location
+# and every other tf15-client module's own resolution of these three), same
+# proven chain tf15-client/cl_dll and tf15-client/dlls already build with.
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	source = bld.path.ant_glob(['*.cpp'])
+
+	# INTERNAL_VGUI_SUPPORT/STDINT_H carried straight from vgui_support's
+	# own CMakeLists.txt; stricmp/_vsnprintf are this project's usual
+	# non-MSVC renames.
+	defines = [
+		'INTERNAL_VGUI_SUPPORT',
+		'STDINT_H="stdint.h"',
+		'stricmp=strcasecmp',
+		'_vsnprintf=vsnprintf',
+	]
+
+	# Same GoldSrc-era type-punning idiom as vgui_dll's own wscript.
+	cxxflags = ['-fno-strict-aliasing']
+
+	bld.stlib(
+		source   = source,
+		target   = 'vgui_support',
+		name     = 'vgui_support',
+		includes = [
+			'.',
+			'vgui-dev/include',
+			'../../common',
+			'../../public',
+			'../../dlls',
+			'../../../engine',
+		],
+		defines  = defines,
+		cxxflags = cxxflags,
+		use      = 'werror',
+		idx      = bld.get_taskgen_count()
+	)

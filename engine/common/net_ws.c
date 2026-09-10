@@ -68,6 +68,9 @@ typedef struct
 	int		current_sequence;
 	int		split_count;
 	int		total_size;
+	size_t		body_size;	// learned from the sender, 0 until a non-final fragment lands
+	size_t		last_size;	// payload length of the final fragment, once seen
+	qboolean	body_guessed;	// final fragment was placed using our own splitsize
 	char		buffer[NET_MAX_FRAGMENT];
 } LONGPACKET;
 
@@ -1272,6 +1275,9 @@ static qboolean NET_GetLong( byte *pData, size_t size, size_t *outSize, size_t s
 		net.split.current_sequence = sequence_number;
 		net.split.split_count = packet_count;
 		net.split.total_size = 0;
+		net.split.body_size = 0;
+		net.split.last_size = 0;
+		net.split.body_guessed = false;
 
 		// clear part's sequence
 		for( int i = 0; i < ARRAYSIZE( net.split_flags ); i++ )
@@ -1283,7 +1289,82 @@ static qboolean NET_GetLong( byte *pData, size_t size, size_t *outSize, size_t s
 
 	size -= header_size;
 
-	size_t body_size = splitsize - header_size;
+	// The SENDER picks the split size, and it need not match ours: a server may
+	// fragment at FRAGMENT_MIN_SIZE (508) while this client's CL_GetSplitSize()
+	// reports FRAGMENT_DEFAULT_SIZE (1200). Deriving the body size from our own
+	// splitsize then scatters every fragment after the first to a wrong offset,
+	// leaving a zero-filled hole; the parser walks into it and dies on svc_bad.
+	// Every fragment except the last carries a full body, so learn the real size
+	// from one of those instead of assuming it.
+	if( packet_number != packet_count - 1 )
+	{
+		if( net.split.body_size != 0 && net.split.body_size != size )
+		{
+			// casts: this newlib has no C99 %z, it would print the literal "zu"
+			Con_Printf( S_ERROR "%s: inconsistent fragment body size (%d, had %d), restarting\n",
+				__func__, (int)size, (int)net.split.body_size );
+			net.split.current_sequence = -1;
+			return false;
+		}
+
+		// report the sender/receiver disagreement once per session: this is the
+		// condition that used to corrupt reassembly, and it says which flavors
+		// and which servers were ever actually exposed to it
+		if( net.split.body_size == 0 && size != splitsize - header_size )
+		{
+			static qboolean reported = false;
+
+			if( !reported )
+			{
+				reported = true;
+				Con_Printf( S_WARN "%s: sender splits at %d, we assume %d -- mismatch handled\n",
+					__func__, (int)( size + header_size ), (int)splitsize );
+			}
+		}
+
+		net.split.body_size = size;
+
+		// the final fragment arrived before we knew the sender's body size, so it
+		// was placed using our own splitsize. Now that we know the real one, slide
+		// it to where it belongs instead of dropping the whole message.
+		if( net.split.body_guessed )
+		{
+			size_t guessed = splitsize - header_size;
+
+			if( guessed != net.split.body_size )
+			{
+				size_t from = (size_t)( packet_count - 1 ) * guessed;
+				size_t to = (size_t)( packet_count - 1 ) * net.split.body_size;
+
+				if( from + net.split.last_size <= sizeof( net.split.buffer ) &&
+					to + net.split.last_size <= sizeof( net.split.buffer ))
+				{
+					memmove( net.split.buffer + to, net.split.buffer + from, net.split.last_size );
+					net.split.total_size = net.split.last_size + net.split.body_size * ( packet_count - 1 );
+				}
+				else
+				{
+					Con_Printf( S_ERROR "%s: cannot relocate final fragment, restarting\n", __func__ );
+					net.split.current_sequence = -1;
+					return false;
+				}
+			}
+
+			net.split.body_guessed = false;
+		}
+	}
+	else
+	{
+		// remember the tail length so it can be relocated if our guess was wrong
+		net.split.last_size = size;
+
+		// its own length says nothing about the sender's body size, so fall back
+		// to our splitsize for now and mark the placement as provisional
+		if( net.split.body_size == 0 )
+			net.split.body_guessed = true;
+	}
+
+	size_t body_size = net.split.body_size != 0 ? net.split.body_size : splitsize - header_size;
 	size_t offset = (size_t)packet_number * body_size;
 	if( offset + size > sizeof( net.split.buffer ))
 	{

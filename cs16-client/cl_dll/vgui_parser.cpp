@@ -145,7 +145,21 @@ static void Localize_AddToDictionary( const char *name, const char *lang )
 		int ansiLength = len + 1;
 		uchar16 *autf16 = new uchar16[len/2 + 1];
 
-		memcpy( autf16, pFileBuf + 2, len - 2 );
+		// The file is UTF-16 LITTLE-ENDIAN -- the big-endian BOM is rejected
+		// above -- so each code unit must be assembled from its two bytes.
+		// A plain memcpy takes them in host order, which byte-reverses every
+		// character on a big-endian target (PS3/PPC64) and turns the whole
+		// dictionary into noise. Done by hand rather than behind
+		// XASH_BIG_ENDIAN because nothing in this file includes the vendored
+		// build.h that defines it; this form is correct on either endian.
+		// 3rdparty/mainui{,_cs}/MenuStrings.cpp solve the same problem for the
+		// menu's copy of this dictionary with ByteSwapUTF16File().
+		const unsigned char *utf16src = reinterpret_cast<const unsigned char *>( pFileBuf ) + 2;
+		const int utf16chars = ( len - 2 ) / 2;
+
+		for( int c = 0; c < utf16chars; c++ )
+			autf16[c] = (uchar16)( utf16src[c * 2] | ( utf16src[c * 2 + 1] << 8 ));
+
 		autf16[len/2-1] = 0; //null terminator
 
 		afile = new char[ansiLength]; // save original pointer, so we can free it later

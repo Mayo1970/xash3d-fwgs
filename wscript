@@ -110,29 +110,53 @@ SUBDIRS = [
 	Subproject('3rdparty/bzip2',        lambda x: x.env.CLIENT and not x.env.HAVE_SYSTEM_BZ2),
 	Subproject('3rdparty/opus',         lambda x: x.env.CLIENT and not x.env.HAVE_SYSTEM_OPUS),
 	Subproject('3rdparty/opusfile',     lambda x: x.env.CLIENT and not x.env.HAVE_SYSTEM_OPUSFILE),
-	# Same whole-tree swap as the two 'client' rows below, for the same reason.
-	# Counter-Strike's menu is Velaron's mainui_cpp fork, not FWGS's: it is what
-	# implements IGameMenuExports / "GameMenuExports001", which cs16-client's
-	# cdll_int.cpp pulls through the engine's MenuFactory native object to drive
-	# the buy, team and class menus. Exactly one of these supplies the waf name
-	# 'menu' that xshlib.py links.
-	Subproject('3rdparty/mainui',       lambda x: x.env.CLIENT and x.env.PS3_GAME != 'cstrike'),
-	Subproject('3rdparty/mainui_cs',    lambda x: x.env.CLIENT and x.env.PS3_GAME == 'cstrike'),
+	# Same whole-tree swap as the 'client'/'server' rows below, for the same
+	# reason. Counter-Strike's menu is Velaron's mainui_cpp fork at ba8802c: it
+	# is what implements IGameMenuExports / "GameMenuExports001", which
+	# cs16-client's cdll_int.cpp pulls through the engine's MenuFactory native
+	# object to drive the buy, team and class menus. Team Fortress Classic's
+	# menu is a *different* commit/branch of the same Velaron/mainui_cpp repo
+	# (489b8d1, branch tf15-client) -- confirmed via the GitHub API that this
+	# branch adds no GameMenuExports implementation at all (no interface.cpp,
+	# no menus/client/), so it is only there for parity with tf15-client's own
+	# pinned submodule (font backend tweaks, an sdk_includes sync, a
+	# ServerBrowser.cpp change), not a VGUI replacement -- that is TFC-5's job.
+	# Exactly one of these three supplies the waf name 'menu' that xshlib.py
+	# links.
+	Subproject('3rdparty/mainui',              lambda x: x.env.CLIENT and x.env.PS3_GAME not in ('cstrike', 'tfc')),
+	Subproject('3rdparty/mainui_cs',           lambda x: x.env.CLIENT and x.env.PS3_GAME == 'cstrike'),
+	Subproject('tf15-client/3rdparty/mainui_cpp', lambda x: x.env.CLIENT and x.env.PS3_GAME == 'tfc'),
 	Subproject('3rdparty/MultiEmulator',lambda x: x.env.CLIENT),
 	Subproject('hlsdk-portable/game_shared'),
 	# Exactly one of these supplies the waf name 'server'. Counter-Strike's
 	# server is ReGameDLL_CS, a separate SDK with its own game_shared/
 	# pm_shared/public/engine snapshots, so the cstrike flavor swaps the whole
-	# server tree the same way it swaps the client and the menu below.
-	Subproject('hlsdk-portable/dlls',   lambda x: x.env.PS3_GAME != 'cstrike'),
+	# server tree the same way it swaps the client and the menu below. Team
+	# Fortress Classic's server is tf15-client/dlls, from the same tf15-client
+	# tree its (future) client will come from -- see the TFC comment above
+	# PS3_GAME_DEFINES.
+	Subproject('hlsdk-portable/dlls',   lambda x: x.env.PS3_GAME not in ('cstrike', 'tfc')),
 	Subproject('regamedll/dlls',        lambda x: x.env.PS3_GAME == 'cstrike'),
+	Subproject('tf15-client/dlls',      lambda x: x.env.PS3_GAME == 'tfc'),
 	# Exactly one of these supplies the waf name 'client' that xshlib.py links
-	# in. Counter-Strike is a separate SDK rather than an hlsdk-portable
-	# variant, so the cstrike flavor swaps the whole client tree instead of
-	# gating hlsdk-portable's with a define. PS3_GAME is unset everywhere but
-	# a PS3 flavor build, so every other target keeps the hlsdk client.
-	Subproject('hlsdk-portable/cl_dll',  lambda x: x.env.CLIENT and x.env.PS3_GAME != 'cstrike'),
+	# in. Counter-Strike and Team Fortress Classic are each a separate SDK
+	# rather than an hlsdk-portable variant, so those flavors swap the whole
+	# client tree instead of gating hlsdk-portable's with a define. PS3_GAME
+	# is unset everywhere but a PS3 flavor build, so every other target keeps
+	# the hlsdk client. TFC-3: tf15-client/cl_dll landing here (instead of
+	# falling through to the stock hlsdk-portable client, as it did since
+	# TFC-1/2) is what makes the RENAME_COMDAT_GROUPS 'tfc' gate in
+	# xshlib.py's add_target() harmless-but-unneeded rather than load-bearing
+	# -- client and server now share tf15-client's own byte-identical class
+	# layouts instead of hlsdk-portable's divergent ones.
+	Subproject('hlsdk-portable/cl_dll',  lambda x: x.env.CLIENT and x.env.PS3_GAME not in ('cstrike', 'tfc')),
 	Subproject('cs16-client/cl_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME == 'cstrike'),
+	# TFC-5: real classic VGUI1, linked into tf15-client/cl_dll's own
+	# 'client' target below via use= (not a --static-linking reloc module --
+	# see tf15-client/3rdparty/vgui_support/wscript's own comment for why).
+	Subproject('tf15-client/3rdparty/vgui_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME == 'tfc'),
+	Subproject('tf15-client/3rdparty/vgui_support', lambda x: x.env.CLIENT and x.env.PS3_GAME == 'tfc'),
+	Subproject('tf15-client/cl_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME == 'tfc'),
 	Subproject('engine'), # keep latest for static linking
 ]
 
@@ -159,6 +183,7 @@ PS3_FLAVORS = {
 	'gearbox': ('Xash3D FWGS (Opposing Force)',  'XASHOF000', 'icons/of/ICON0.PNG',  'build_opfor'),
 	'ricochet':('Xash3D FWGS (Ricochet)',        'XASHRC000', 'icons/ricochet/ICON0.PNG', 'build_ricochet'),
 	'cstrike': ('Xash3D FWGS (Counter-Strike)',  'XASHCS000', 'icons/cs/ICON0.PNG',  'build_cs'),
+	'tfc':     ('Xash3D FWGS (Team Fortress Classic)', 'XASHTF000', 'icons/tf/ICON0.PNG', 'build_tfc'),
 }
 
 # Game-code define per flavor. One vendored hlsdk-portable tree serves every
@@ -195,6 +220,17 @@ PS3_FLAVORS = {
 # 3rdparty/mainui_cs (Velaron's mainui_cpp fork, which implements
 # GameMenuExports001 and so the buy/team/class menus) over 3rdparty/mainui.
 # The server is still base HL1, so local play is HL1 rules, not CS.
+# TFC also has deliberately NO entry here, same reasoning as CSTRIKE: Team
+# Fortress Classic is a separate SDK (Velaron/tf15-client), not an
+# hlsdk-portable variant, so it swaps the whole client/server/menu source
+# trees rather than gating this one -- and unlike when this comment was first
+# written, that full swap has now landed: tf15-client/dlls (server, TFC-2),
+# tf15-client/cl_dll (client, TFC-3) and tf15-client/3rdparty/mainui_cpp
+# (menu, TFC-4) each supply their SUBDIRS row only when PS3_GAME == 'tfc',
+# same three-way shape as CSTRIKE above. TFC-5 (real classic VGUI1 -- team/
+# class select, HUD, scoreboard) has also now landed: the vgui_dll/
+# vgui_support pair above supplies it, linked into tf15-client/cl_dll's own
+# 'client' target rather than getting a fourth SUBDIRS row of its own.
 PS3_GAME_DEFINES = {
 	'bshift':   ['BSHIFT'],
 	'gearbox':  ['OPFOR'],

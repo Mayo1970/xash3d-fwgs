@@ -40,17 +40,19 @@ svgame_static_t	svgame;	// persistant game info
 static CVAR_DEFINE_AUTO( sv_ps3diag_map, "", 0, "PS3_DIAG: arm the diagnostic channel when spawning this map (empty = never)" );
 static CVAR_DEFINE_AUTO( sv_ps3diag_frames, "0", 0, "PS3_DIAG: also arm the per-frame diagnostic sites for the armed map" );
 
+// Registered from SV_Init, NOT lazily on first spawn. The entire point of the
+// cvar is to be set from userconfig.cfg before any map loads, and a cvar that
+// does not exist yet is rejected there as an unknown command -- which made the
+// channel unarmable in practice. SV_Init runs well before the config exec in
+// Host_Init, so registering here is early enough.
+void SV_PS3DiagInit( void )
+{
+	Cvar_RegisterVariable( &sv_ps3diag_map );
+	Cvar_RegisterVariable( &sv_ps3diag_frames );
+}
+
 static void SV_PS3DiagArm( const char *mapname )
 {
-	static qboolean registered = false;
-
-	if( !registered )
-	{
-		Cvar_RegisterVariable( &sv_ps3diag_map );
-		Cvar_RegisterVariable( &sv_ps3diag_frames );
-		registered = true;
-	}
-
 	if( COM_StringEmptyOrNULL( sv_ps3diag_map.string ) || Q_stricmp( mapname, sv_ps3diag_map.string ))
 		return;
 
@@ -891,6 +893,14 @@ static void SV_SetupClients( void )
 	// branch is capped: the dedicated one above has a lower bound of 4, and a
 	// platform cap below that would make bound()'s range inverted for no gain,
 	// since no console target here builds a dedicated server.
+#if XASH_PS3
+	// TEST ONLY: raise the listen-server cap to 9 (8 bots + 1 host, true 4v4)
+	// for the cstrike flavor, to check PS3_ProbeMemory's contiguous-block
+	// headroom. Do not ship this -- see DEFAULT_MAX_LISTEN_CLIENTS's comment
+	// in defaults.h.
+	else if( !Q_stricmp( XASH_PS3_GAME, "cstrike" ) )
+		svs.maxclients = bound( 1, svs.maxclients, 9 );
+#endif
 	else svs.maxclients = bound( 1, svs.maxclients, DEFAULT_MAX_LISTEN_CLIENTS );
 
 	if( svs.maxclients < requested_maxclients )

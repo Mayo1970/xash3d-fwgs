@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "sound.h"
 #if XASH_PS3
 #include "platform/platform.h" // PS3_ProbeMemory
+#include "ps3_sound_preload.h"
 #endif
 
 // during registration it is possible to have more sounds
@@ -60,6 +61,47 @@ static void S_RegisterClientEffectSounds( void )
 
 	Con_Printf( "PS3_Audio: registered %d/%d client effect sounds for map preload\n",
 		registered, requested );
+}
+
+// The mod's client DLL plays these by name during gameplay (weapon event
+// scripts, HUD, temp entities) and the server precaches only some of them, so
+// a first use blocks the main thread in S_LoadSound past the ~110ms cushion.
+// Table is generated from the vendored client sources -- see
+// scripts/ps3_gen_sound_preload.py.
+static void S_RegisterModClientSounds( void )
+{
+	const ps3_sound_preload_t *tbl = NULL;
+	int registered = 0;
+	int absent = 0;
+
+	for( int i = 0; i < (int)ARRAYSIZE( ps3_sound_preload ); i++ )
+	{
+		if( !Q_stricmp( GI->gamefolder, ps3_sound_preload[i].gamedir ))
+		{
+			tbl = &ps3_sound_preload[i];
+			break;
+		}
+	}
+
+	if( !tbl )
+		return;
+
+	for( int i = 0; i < tbl->count; i++ )
+	{
+		// A name with no file on disk caches a 1-second default sound instead
+		// (88Kb each), so skip it rather than pay memory for a guaranteed miss.
+		if( !FS_FileExists( va( DEFAULT_SOUNDPATH "%s", tbl->names[i] ), false ))
+		{
+			absent++;
+			continue;
+		}
+
+		if( S_RegisterSound( tbl->names[i] ) >= 0 )
+			registered++;
+	}
+
+	Con_Printf( "PS3_Audio: registered %d/%d %s client sounds for map preload, %d absent\n",
+		registered, tbl->count, tbl->gamedir, absent );
 }
 #endif
 
@@ -344,6 +386,7 @@ void S_BeginRegistration( void )
 
 #if XASH_PS3
 	S_RegisterClientEffectSounds();
+	S_RegisterModClientSounds();
 #endif
 }
 

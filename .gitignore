@@ -362,6 +362,9 @@ cmake-build-*
 3rdparty/hlsdk-portable
 !scripts/build-ninja.py
 
+# Some stuff of mine
+scripts/
+
 # AI-related stuff
 CLAUDE.md
 .claude/

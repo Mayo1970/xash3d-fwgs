@@ -1,0 +1,114 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	# Matches tf15-client/dlls/CMakeLists.txt's SVDLL_SOURCES exactly (74
+	# files vendored here, commented-out CMake entries -- dbghelpers.cpp,
+	# genericmonster.cpp, menu.cpp, mpstubb.cpp, prop.cpp, rpg.cpp -- were
+	# never copied into this tree, so a recursive glob is safe, same
+	# reasoning as regamedll/dlls/wscript.
+	source = bld.path.ant_glob('**/*.cpp')
+	source += bld.path.parent.ant_glob([
+		'wpn_shared/*.cpp',
+		'pm_shared/*.c',
+	])
+
+	# CMakeLists' non-MSVC branch, "enough for all non-Win32 systems" per its
+	# own comment -- not a claim about the OS, same reasoning cs16-client and
+	# regamedll use these renames for. NO_VOICEGAMEMGR matches USE_VOICEMGR
+	# being off by default upstream (game_shared/voice_gamemgr.cpp is not
+	# vendored here), same choice hlsdk-portable/dlls/wscript makes.
+	defines = [
+		'CLIENT_WEAPONS',
+		'NO_VOICEGAMEMGR',
+		'_LINUX',
+		'stricmp=strcasecmp',
+		'strnicmp=strncasecmp',
+		'_snprintf=snprintf',
+		'_vsnprintf=vsnprintf',
+	]
+
+	# No PS3_GAME_DEFINES entry is consumed here, for the same reason
+	# cs16-client/cl_dll and regamedll/dlls consume none: TFC swaps this
+	# whole source tree in instead of gating hlsdk-portable's, so a game
+	# define has nothing to select. See the TFC comment above
+	# PS3_GAME_DEFINES in the root wscript.
+
+	includes = [
+		'.',
+		'../common',
+		'../engine',
+		'../pm_shared',
+		'../game_shared',
+		'../public',
+		'../wpn_shared',
+	]
+
+	# XASH_64BIT is NOT needed here, unlike regamedll: dlls/extdll.h defines
+	# it itself from a direct __powerpc64__/__LP64__ check
+	# (`#if defined(__LP64__) || ... || defined(__powerpc64__)`), the same
+	# autodetect upstream Xash's own public/build.h does -- it does not rely
+	# on build.h being included at all. Confirmed by reading extdll.h before
+	# assuming this tree had regamedll's bug.
+	#
+	# XASH_BIG_ENDIAN is also NOT forced here, unlike regamedll: this tree's
+	# own public/build.h (patched with a __PPU__ branch, see that file) IS
+	# reachable -- common/xash3d_types.h includes it directly -- so the
+	# normal Xash big-endian autodetect flows through for real, unlike
+	# regamedll's dead build.h snapshot that nothing includes.
+
+	common_flags = [
+		'-fno-exceptions',
+		'-Wno-invalid-offsetof',
+	]
+
+	# Not a warning silencer: dlls/util.cpp's PRNG seed
+	# (`*(int *)&low`/`*(int *)&high`) type-puns a float through an int
+	# lvalue, the same GoldSrc idiom cs16-client/regamedll hit, which GCC is
+	# entitled to miscompile at -O2 under strict aliasing.
+	common_flags += ['-fno-strict-aliasing']
+
+	# Deliberately NOT adding -fno-rtti here, unlike regamedll: that fix was
+	# for two *independently diverged* SDKs (cs16-client + ReGameDLL_CS)
+	# sharing a same-named class with a *different* actual layout, which
+	# collapses to one and leaves the other's vtable references dangling.
+	# TFC's client and server will compile the *same* wpn_shared/tf_wpn_*.cpp
+	# and pm_shared sources from this one tree, so any shared class's vtable
+	# is byte-identical between the two compiles -- the exact situation base
+	# hlsdk-portable's own dlls/cl_dll split already has today (CLIENT_WEAPONS
+	# compiles several dlls/*.cpp weapon sources into both modules) without
+	# needing -fno-rtti or a COMDAT-group rename. Revisit only if a real
+	# "typeinfo ... defined in discarded section" link error says otherwise.
+
+	cxxflags = list(common_flags)
+	cflags = list(common_flags)
+
+	# Not yet confirmed to overflow (that needs a real build), but close
+	# enough to opfor's known-bad ~98 TU count (this module is ~89: 74 dlls +
+	# 12 wpn_shared + 3 pm_shared) to add proactively rather than spend a
+	# build round-trip on a "relocation truncated to fit: R_PPC64_TOC16_DS"
+	# that this project has already seen twice (gearbox, cstrike). Same
+	# reasoning as both of those -- see PS3_GAME_DEFINES/regamedll notes.
+	if bld.env.DEST_OS == 'ps3':
+		cflags += ['-mminimal-toc']
+		cxxflags += ['-mminimal-toc']
+
+	bld.shlib(
+		source   = source,
+		target   = 'server',
+		name     = 'server',
+		features = 'c cxx',
+		includes = includes,
+		defines  = defines,
+		cflags   = cflags,
+		cxxflags = cxxflags,
+		use      = ['vcs_info', 'werror', 'yy_thunks'],
+		install_path = None,
+		idx = bld.get_taskgen_count()
+	)

@@ -113,6 +113,32 @@ file_t *FS_Open( const char *filepath, const char *mode, qboolean gamedironly )
 		// filepath, so their cached listings can no longer be trusted
 		FS_InvalidateDirCache( fs_writepath->dir, filepath );
 
+		// a write that escapes the write path with "../" (server and HTTP
+		// downloads land in <gamedir>_downloads/) never touches the sibling
+		// search path's own dir cache above, so the next lookup keeps serving
+		// the stale listing and cannot see the new file. Invalidate the
+		// matching search path here too.
+		if( Q_strstr( filepath, ".." ))
+		{
+			const char *rel = filepath;
+			searchpath_t *sp;
+
+			while( !Q_strncmp( rel, "../", 3 ))
+				rel += 3;
+
+			for( sp = fs_searchpaths; sp; sp = sp->next )
+			{
+				size_t pfxlen;
+
+				if( sp->type != SEARCHPATH_PLAIN && sp->type != SEARCHPATH_PK3DIR )
+					continue;
+
+				pfxlen = Q_strlen( sp->filename );
+				if( pfxlen && !Q_strnicmp( rel, sp->filename, pfxlen ))
+					FS_InvalidateDirCache( sp->dir, rel + pfxlen );
+			}
+		}
+
 		return FS_SysOpen( real_path, mode );
 	}
 
@@ -657,12 +683,6 @@ byte *FS_LoadFileFromArchive( searchpath_t *sp, const char *path, int pack_ind, 
 		return NULL;
 
 	filesize = file->real_length;
-
-#if XASH_PS3
-	// [cs5] names the file behind large allocations (OOM error only names the allocator)
-	if( filesize >= 1024 * 1024 )
-		Con_Printf( "[cs5] FS load %s (%li bytes)\n", path, (long)filesize );
-#endif
 
 	buf = (byte *)pfnAlloc( filesize + 1 );
 

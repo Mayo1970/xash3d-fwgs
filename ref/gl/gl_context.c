@@ -393,7 +393,12 @@ static void* GAME_EXPORT R_GetProcAddress( const char *name )
 
 static const char *R_GetConfigName( void )
 {
+#if XASH_PS3
+	// keep PS3 renderer cvars out of a PC Half-Life opengl.cfg
+	return "ps3opengl";
+#else
 	return "opengl";
+#endif
 }
 
 static void R_NewMap( void )

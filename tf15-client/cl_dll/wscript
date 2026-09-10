@@ -1,0 +1,151 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	# Matches tf15-client/cl_dll/CMakeLists.txt's CLDLL_SOURCES: every real
+	# .cpp file at cl_dll/ root plus cl_dll/tfc/ (95 files vendored, none
+	# commented out in the source CMakeLists), so a recursive glob is safe,
+	# same reasoning as tf15-client/dlls/wscript. VGUI1 (team/class select,
+	# HUD chrome, scoreboard) is real, load-bearing code here -- unlike base
+	# HL1's own dead vgui_*.cpp. TFC-5 vendored FWGS/openvgui + Velaron's
+	# vgui_support fork (see tf15-client/3rdparty/vgui_dll and
+	# tf15-client/3rdparty/vgui_support), so vgui_*.cpp is no longer
+	# excluded here. input_goldsource.cpp stays excluded (dlopen-based SDL2
+	# shim, unsupported on PS3 -- no dlopen), matching
+	# hlsdk-portable/cl_dll/wscript's own precedent.
+	excluded_files = [
+		'input_goldsource.cpp',
+	]
+
+	source = bld.path.ant_glob('**/*.cpp', excl=excluded_files)
+
+	# game_shared/ here is the 9 real files CLDLL_SOURCES pulls from it:
+	# 7 VGUI widget helpers (now real, load-bearing code, TFC-5) plus
+	# voice_banmgr.cpp/voice_status.cpp. voice_gamemgr.cpp and
+	# voice_vgui_tweakdlg.cpp were never in CLDLL_SOURCES to begin with
+	# (server-side voice manager and a VGUI settings dialog) -- an explicit
+	# list, not a glob, so those two stay excluded.
+
+	source += bld.path.parent.ant_glob([
+		'public/interface.cpp',
+		'common/parsemsg.cpp',
+		'pm_shared/*.c',
+		'wpn_shared/*.cpp',
+		'game_shared/vgui_checkbutton2.cpp',
+		'game_shared/vgui_grid.cpp',
+		'game_shared/vgui_helpers.cpp',
+		'game_shared/vgui_listbox.cpp',
+		'game_shared/vgui_loadtga.cpp',
+		'game_shared/vgui_scrollbar2.cpp',
+		'game_shared/vgui_slider2.cpp',
+		'game_shared/voice_banmgr.cpp',
+		'game_shared/voice_status.cpp',
+	])
+
+	# CLIENT_DLL gates shared dlls/-side headers (weapons.h, util.h) that
+	# wpn_shared/tf_wpn_*.cpp and cl_dll/tfc/tf_weapons.cpp pull in --
+	# confirmed by reading those headers, not assumed. CLIENT_WEAPONS is
+	# what makes tf_weapons.cpp actually define HUD_PostRunCmd (one of this
+	# module's required exports); the rest mirror tf15-client/dlls/wscript's
+	# own non-MSVC renames, needed here too since this module compiles fresh
+	# copies of the same shared headers.
+	# USE_VGUI=1 turns on the ~40 gViewPort/vgui_*.cpp call sites TFC-3 left
+	# gated (a bare -DUSE_VGUI already defaults to 1, but writing it
+	# explicitly avoids relying on that).
+	defines = [
+		'CLIENT_DLL',
+		'CLIENT_WEAPONS',
+		'USE_VGUI=1',
+		'_LINUX',
+		'stricmp=strcasecmp',
+		'strnicmp=strncasecmp',
+		'_snprintf=snprintf',
+		'_vsnprintf=vsnprintf',
+	]
+
+	# No PS3_GAME_DEFINES entry is consumed here, for the same reason
+	# tf15-client/dlls and cs16-client/cl_dll consume none: TFC swaps this
+	# whole source tree in instead of gating hlsdk-portable's, so a game
+	# define has nothing to select. See the TFC comment above
+	# PS3_GAME_DEFINES in the root wscript.
+
+	# ../dlls is required, not optional: wpn_shared/tf_wpn_*.cpp and
+	# cl_dll/tfc/tf_weapons.cpp both #include "extdll.h"/"cbase.h"/
+	# "weapons.h"/"nodes.h"/"player.h"/"gamerules.h"/"tf_defs.h" directly --
+	# confirmed by reading those files -- and all of those live only in
+	# tf15-client/dlls/, exactly like hlsdk-portable/cl_dll/wscript already
+	# needs '../dlls' for its own predicted weapon sources.
+	# ../3rdparty/vgui_dll/include is TFC-5's real VGUI1 headers (FWGS/
+	# openvgui) -- vgui_TeamFortressViewport.cpp and friends construct real
+	# Panel/Frame/Label objects whose layout must match the actual vgui
+	# stlib this module links against below, not
+	# hlsdk-portable/utils/fake_vgui's unrelated header-only stand-in (never
+	# on this module's include path to begin with -- that one only serves
+	# base HL1's own dead vgui_*.cpp via hlsdk-portable/cl_dll/wscript).
+	includes = [
+		'.',
+		'../dlls',
+		'../common',
+		'../engine',
+		'../pm_shared',
+		'../game_shared',
+		'../public',
+		'../wpn_shared',
+		'../3rdparty/vgui_dll/include',
+	]
+
+	# Same reasoning as tf15-client/dlls/wscript: cl_dll.h self-detects
+	# XASH_64BIT exactly like dlls/extdll.h does, and the shared
+	# public/build.h (already patched with a __PPU__ branch) is genuinely
+	# reachable, so no XASH_64BIT/XASH_BIG_ENDIAN belt-and-suspenders
+	# defines are needed here either.
+
+	common_flags = [
+		'-fno-exceptions',
+		'-Wno-invalid-offsetof',
+	]
+
+	# Not a warning silencer: the same GoldSrc float/int type-punning idiom
+	# tf15-client/dlls/wscript already documents (shared PRNG seeding code in
+	# util.cpp) is compiled fresh into this module too.
+	common_flags += ['-fno-strict-aliasing']
+
+	# Deliberately NOT adding -fno-rtti here, same reasoning as
+	# tf15-client/dlls/wscript: this client and TFC-2's server compile the
+	# *same* wpn_shared/tf_wpn_*.cpp and pm_shared sources from one tree, so
+	# any shared class's vtable is byte-identical between the two compiles --
+	# not CS's two-independently-diverged-SDK situation that made -fno-rtti
+	# load-bearing there. Revisit only if a real "typeinfo ... defined in
+	# discarded section" link error says otherwise.
+
+	cxxflags = list(common_flags)
+	cflags = list(common_flags)
+
+	# Same PPC64 ELFv1 .toc concern as tf15-client/dlls/wscript: this module
+	# is ~95 files at cl_dll root/tfc plus 12 wpn_shared plus 3 pm_shared,
+	# comparable in size to that already-tight server module.
+	if bld.env.DEST_OS == 'ps3':
+		cflags += ['-mminimal-toc']
+		cxxflags += ['-mminimal-toc']
+
+	bld.shlib(
+		source   = source,
+		target   = 'client',
+		name     = 'client',
+		features = 'c cxx',
+		includes = includes,
+		defines  = defines,
+		cflags   = cflags,
+		cxxflags = cxxflags,
+		# 'vgui_support' before 'vgui' -- consumer before dependency, for
+		# ld -r's normal archive-member resolution (TFC-5).
+		use      = ['vcs_info', 'werror', 'yy_thunks', 'vgui_support', 'vgui'],
+		install_path = None,
+		idx = bld.get_taskgen_count()
+	)

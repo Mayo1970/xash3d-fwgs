@@ -100,6 +100,59 @@ void COM_UnMunge3( byte *data, size_t len, int seq )
 	COM_GenericMunge( data, len, seq, mungify_table3, true );
 }
 
+/*
+=============
+scalar munging helpers
+
+GoldSrc munges 32-bit scalars -- the map CRC in the "spawn" command and the
+server checksum in svc_serverdata -- through the raw in-memory bytes of the
+variable. That layout is little-endian on every machine Valve shipped, so a
+plain (byte *)&scalar cast feeds the munger its bytes in reverse order on a
+big-endian host and the two sides then compute different numbers.
+
+COM_GenericMunge itself is byte-order neutral: it is only ever called with a
+byte-valued sequence, and COM_SwapLong compensates for the host's load/store
+order exactly. Only the scalar call sites need the layout pinned, so route
+them through an explicit little-endian buffer. On little-endian hosts these
+helpers are bit-identical to the old cast.
+=============
+*/
+static void COM_ScalarToLE( uint32_t val, byte out[4] )
+{
+	out[0] = (byte)(  val         & 0xFF );
+	out[1] = (byte)(( val >> 8  ) & 0xFF );
+	out[2] = (byte)(( val >> 16 ) & 0xFF );
+	out[3] = (byte)(( val >> 24 ) & 0xFF );
+}
+
+static uint32_t COM_ScalarFromLE( const byte in[4] )
+{
+	return (uint32_t)in[0]
+		| ((uint32_t)in[1] << 8  )
+		| ((uint32_t)in[2] << 16 )
+		| ((uint32_t)in[3] << 24 );
+}
+
+uint32_t COM_Munge2Long( uint32_t val, int seq )
+{
+	byte b[4];
+
+	COM_ScalarToLE( val, b );
+	COM_Munge2( b, sizeof( b ), seq );
+
+	return COM_ScalarFromLE( b );
+}
+
+uint32_t COM_UnMunge3Long( uint32_t val, int seq )
+{
+	byte b[4];
+
+	COM_ScalarToLE( val, b );
+	COM_UnMunge3( b, sizeof( b ), seq );
+
+	return COM_ScalarFromLE( b );
+}
+
 #if XASH_ENGINE_TESTS
 #include "tests.h"
 

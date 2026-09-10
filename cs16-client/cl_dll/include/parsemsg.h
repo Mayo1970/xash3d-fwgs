@@ -85,12 +85,24 @@ inline T BufferReader::Read( void )
 	if( sizeof( T ) == 1 )
 		return m_pBuf[m_iRead++];
 
-	// T t = *(T*)(m_pBuf + m_iRead);
-	T t;
-	memcpy( &t, m_pBuf + m_iRead, sizeof( T ) );
+	// The buffer holds LITTLE-ENDIAN wire data. Assembling it byte by byte is
+	// the only host-neutral way to read it. The memcpy this replaced took the
+	// raw bytes in host order, which is correct only on a little-endian target:
+	// on big-endian (PS3/PPC64) it byte-reverses every short and long, so every
+	// usermessage field wider than a byte came out garbage.
+	// This is exactly what the stock HLSDK reader has always done -- see
+	// READ_SHORT and READ_LONG in hlsdk-portable/cl_dll/parsemsg.cpp, which is
+	// why the hlsdk-based flavors never hit this.
+	// Only sizes 1, 2 and 4 are ever instantiated here (char*/float have their
+	// own specializations below), so a 32-bit accumulator is wide enough.
+	uint32_t raw = 0;
+
+	for( size_t i = 0; i < sizeof( T ); i++ )
+		raw |= (uint32_t)m_pBuf[m_iRead + i] << ( i * 8 );
+
 	m_iRead += sizeof( T );
 
-	return t;
+	return (T)raw;
 }
 
 
@@ -123,8 +135,8 @@ inline float BufferReader::Read( void )
 {
 	union
 	{
-		unsigned char b[4];
-		float f;
+		uint32_t u;
+		float    f;
 	} tr;
 
 	if( m_bBad )
@@ -136,8 +148,13 @@ inline float BufferReader::Read( void )
 		return -1.0f;
 	}
 
-	for( int i = 0; i < 4; i++ )
-		tr.b[i] = m_pBuf[m_iRead + i];
+	// Same little-endian wire order as the integer path above. The byte-for-byte
+	// copy this replaced put the wire's low byte into the sign/exponent position
+	// on a big-endian host, so every float field read back as noise.
+	tr.u = (uint32_t)m_pBuf[m_iRead]
+		| ((uint32_t)m_pBuf[m_iRead + 1] << 8)
+		| ((uint32_t)m_pBuf[m_iRead + 2] << 16)
+		| ((uint32_t)m_pBuf[m_iRead + 3] << 24);
 
 	m_iRead += 4;
 

@@ -106,10 +106,8 @@ CCSBotManager::CCSBotManager()
 	}
 
 #ifdef REGAMEDLL_FIXES
-	CONSOLE_ECHO("[cs4] CCSBotManager: before AddServerCommands\n");
 	AddServerCommands();
 #endif
-	CONSOLE_ECHO("[cs4] CCSBotManager: ctor done\n");
 }
 
 // Invoked when a new round begins

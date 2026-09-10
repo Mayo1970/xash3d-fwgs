@@ -20,6 +20,8 @@
 #include <unistd.h>
 #endif // _WIN32
 
+#include "nav_byteswap.h"
+
 unsigned int CNavArea::m_nextID = 1;
 unsigned int CNavArea::m_masterMarker = 1;
 
@@ -119,15 +121,22 @@ HidingSpot::HidingSpot(const Vector *pos, unsigned char flags)
 
 void HidingSpot::Save(int fd, unsigned int version) const
 {
-	_write(fd, &m_id, sizeof(unsigned int));
-	_write(fd, &m_pos, 3 * sizeof(float));
+	unsigned int id_wire = NavSwap32(m_id);
+	_write(fd, &id_wire, sizeof(unsigned int));
+
+	Vector pos_wire = m_pos;
+	NavSwapFloats(&pos_wire.x, 3);
+	_write(fd, &pos_wire, 3 * sizeof(float));
+
 	_write(fd, &m_flags, sizeof(unsigned char));
 }
 
 void HidingSpot::Load(SteamFile *file, unsigned int version)
 {
 	file->Read(&m_id, sizeof(unsigned int));
+	m_id = NavSwap32(m_id);
 	file->Read(&m_pos, 3 * sizeof(float));
+	NavSwapFloats(&m_pos.x, 3);
 	file->Read(&m_flags, sizeof(unsigned char));
 
 	// update next ID to avoid ID collisions by later spots

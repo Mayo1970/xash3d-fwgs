@@ -54,6 +54,7 @@ CVAR_DEFINE( cl_draw_beams, "r_drawbeams", "1", FCVAR_CHEAT, "render beams" );
 
 static CVAR_DEFINE_AUTO( rcon_address, "", FCVAR_PRIVILEGED, "remote control address" );
 CVAR_DEFINE_AUTO( cl_timeout, "60", 0, "connect timeout (in-seconds)" );
+static CVAR_DEFINE_AUTO( cl_loading_keepalive, "0", FCVAR_ARCHIVE, "send netchan keepalives during blocking resource loads" );
 CVAR_DEFINE_AUTO( cl_nopred, "0", FCVAR_USERINFO, "disable client movement prediction" );
 static CVAR_DEFINE_AUTO( cl_nodelta, "0", 0, "disable delta-compression for server messages" );
 CVAR_DEFINE( cl_crosshair, "crosshair", "1", FCVAR_ARCHIVE, "show weapon chrosshair" );
@@ -2980,8 +2981,13 @@ static void CL_ReadPackets( void )
 	if( NET_IsLocalAddress( cls.netchan.remote_address ))
 		return;
 
-	// if in the debugger last frame, don't timeout
-	if( host.frametime > 5.0f ) cls.netchan.last_received = Platform_DoubleTime();
+	// if in the debugger last frame, don't timeout.
+	// NOTE: host.frametime is clamped to MAX_FRAMETIME (0.25s) by Host_FilterTime,
+	// so it can never exceed 5s and this test used to be dead code. host.pureframetime
+	// is the unclamped duration of the previous frame body, which is what we want:
+	// a multi-second precache stall must not count against the connection.
+	if( host.pureframetime > 5.0 )
+		cls.netchan.last_received = Platform_DoubleTime();
 
 	// check timeout
 	if( cls.state >= ca_connected && cls.state != ca_cinematic && !cls.demoplayback )
@@ -3299,14 +3305,53 @@ static qboolean CL_ShouldRescanFilesystem( void )
 	return retval;
 }
 
+/*
+==============
+CL_LoadingKeepAlive
+
+Precaching and the consistency response both block the host loop for many
+seconds on PS3's slow storage. Nothing in that path touches the netchan, so a
+remote server sees a silent client for the whole load and can time it out.
+
+Send a bare netchan packet (Netchan_TransmitBits appends clc_nop when there is
+nothing to say) at most once per second so the remote end keeps seeing us.
+Off by default: flip cl_loading_keepalive to 1 to test it in isolation.
+==============
+*/
+void CL_LoadingKeepAlive( void )
+{
+	static qboolean	inside = false;
+	static double	nexttime = 0.0;
+	double		now;
+
+	if( !cl_loading_keepalive.value )
+		return;
+
+	// loopback never times out on either side, and re-entering the netchan
+	// from inside a transmit would corrupt the send buffer
+	if( inside || cls.state < ca_connected || cls.demoplayback )
+		return;
+
+	if( NET_IsLocalAddress( cls.netchan.remote_address ))
+		return;
+
+	now = Platform_DoubleTime();
+
+	if( now < nexttime )
+		return;
+
+	nexttime = now + 1.0;
+
+	inside = true;
+	Netchan_TransmitBits( &cls.netchan, 0, "" );
+	inside = false;
+}
+
 qboolean CL_PrecacheResources( void )
 {
 	resource_t	*pRes;
 #if XASH_PS3
 	PS3_ProbeMemory( "CL_PrecacheResources enter" );
-	// [cs5] baseline heap before any map asset loads
-	Con_Printf( "[cs5] heap at CL_PrecacheResources enter:\n" );
-	Mem_DumpPools( 256 * 1024 );
 #endif
 
 	// if we downloaded new WAD files or any other archives they must be added to searchpath
@@ -3359,6 +3404,9 @@ qboolean CL_PrecacheResources( void )
 	// precache all the remaining resources where order is doesn't matter
 	for( pRes = cl.resourcesonhand.pNext; pRes && pRes != &cl.resourcesonhand; pRes = pRes->pNext )
 	{
+		// this loop blocks the host for many seconds on PS3 storage
+		CL_LoadingKeepAlive();
+
 		if( FBitSet( pRes->ucFlags, RES_PRECACHED ))
 			continue;
 
@@ -3560,6 +3608,7 @@ static void CL_InitLocal( void )
 	Cvar_RegisterVariable( &cl_solid_players );
 	Cvar_RegisterVariable( &cl_interp );
 	Cvar_RegisterVariable( &cl_timeout );
+	Cvar_RegisterVariable( &cl_loading_keepalive );
 	Cvar_RegisterVariable( &cl_charset );
 	Cvar_RegisterVariable( &hud_utf8 );
 

@@ -1,0 +1,119 @@
+#! /usr/bin/env python
+# encoding: utf-8
+# a1batross, mittorn, 2018
+
+# Team Fortress Classic's menu module. This is Velaron/mainui_cpp @489b8d1
+# (branch tf15-client -- the fork tf15-client pins as its own
+# 3rdparty/mainui_cpp submodule), NOT FWGS's mainui_cpp and NOT the same
+# commit/branch cs16-client's 3rdparty/mainui_cs vendors -- see
+# 3rdparty/mainui for the vanilla tree and 3rdparty/mainui_cs for CS's own
+# fork. Exactly one of the three supplies the waf name 'menu' that
+# xshlib.py links; the root wscript's SUBDIRS picks this tree only when
+# PS3_GAME == 'tfc'.
+#
+# Confirmed via the GitHub API before vendoring: this branch adds no
+# GameMenuExports/IGameMenuExports implementation at all (no interface.cpp,
+# no menus/client/) -- it is a light divergence from FWGS master (font
+# backend tweaks, an sdk_includes sync, a ServerBrowser.cpp change, some
+# mathlib.h trims), not a CS-style VGUI replacement. So this wscript is
+# plain 3rdparty/mainui/wscript verbatim, none of mainui_cs/wscript's extra
+# menus/client glob or cs16-client/common/interface.cpp compile are needed.
+
+from waflib import Logs, Configure
+import os
+
+top = '.'
+
+FT2_CHECK='''extern "C" {
+#include <ft2build.h>
+#include FT_FREETYPE_H
+}
+
+int main() { return FT_Init_FreeType( NULL ); }
+'''
+
+def options(opt):
+	# The stock mainui wscript owns --enable-stbtt; both subprojects are parsed
+	# for options regardless of which one is enabled, so registering it twice
+	# would be a waf option collision. It is read from conf.options below all
+	# the same.
+	return
+
+def configure(conf):
+	conf.load('fwgslib cxx11')
+	conf.env.append_unique('DEFINES', 'STDINT_H=<cstdint>')
+
+	if not conf.check_std('cxx11'):
+		conf.define('MY_COMPILER_SUCKS', 1)
+
+	if conf.env.DEST_OS in ['android', 'darwin', 'nswitch', 'psvita', 'emscripten'] or conf.env.MAGX:
+		conf.options.USE_STBTT = True
+
+	conf.define('MAINUI_USE_CUSTOM_FONT_RENDER', 1)
+
+	nortti = {
+		'msvc': ['/GR-'],
+		'default': ['-fno-rtti']
+	}
+
+	conf.env.append_unique('CXXFLAGS', conf.get_flags_by_compiler(nortti, conf.env.COMPILER_CC))
+
+	conf.define_cond('MAINUI_USE_STB', conf.options.USE_STBTT)
+
+	if conf.env.DEST_OS == 'android':
+		conf.define('NO_STL', 1)
+		conf.env.append_unique('CXXFLAGS', '-fno-exceptions')
+
+	# PS3 takes NEITHER TTF backend, so FontManager falls straight through to
+	# CBitmapFont -- identical reasoning to 3rdparty/mainui/wscript and
+	# 3rdparty/mainui_cs/wscript, read the long comment in the former. Short
+	# version: the .ttf files are not in the PKG, each failed lookup costs a
+	# full searchpath walk, and shipping the fonts instead was tried on
+	# hardware and made all menu text invisible.
+	if conf.env.DEST_OS in ['win32', 'dos', 'ps3']:
+		pass
+	else:
+		if not conf.options.USE_STBTT and not conf.options.LOW_MEMORY:
+			if conf.env.DEST_OS == 'ps3':
+				# PS3 is a fully-static link target (no shared libs, whole
+				# process is one ELF) -- ps3dev's prebuilt libfreetype.a needs
+				# zlib (freetype2.pc has `Libs.private: -lz`), but pkg-config
+				# only emits Libs.private when asked for a --static link.
+				conf.check_cfg(package='freetype2', args='--cflags --libs --static', uselib_store='FT2')
+				conf.check_cxx(fragment=FT2_CHECK, use='FT2', msg='Checking for \'freetype2\' sanity')
+			else:
+				conf.check_pkg('freetype2', 'FT2', FT2_CHECK)
+			conf.define('MAINUI_USE_FREETYPE', 1)
+
+def build(bld):
+	source = bld.path.ant_glob([
+		'*.cpp',
+		'miniutl/*.cpp',
+		'font/*.cpp',
+		'menus/*.cpp',
+		'menus/dynamic/*.cpp',
+		'model/*.cpp',
+		'controls/*.cpp'
+	])
+
+	includes = [
+		'.',
+		'miniutl/',
+		'font/',
+		'controls/',
+		'menus/',
+		'model/',
+		'sdk_includes/common',
+		'sdk_includes/engine',
+		'sdk_includes/public',
+		'sdk_includes/pm_shared'
+	]
+
+	bld.shlib(
+		source   = source,
+		target   = 'menu',
+		includes = includes,
+		use      = 'werror FT2 GDI32 USER32 yy_thunks',
+		install_path = None,
+		cmake_skip = True
+	)

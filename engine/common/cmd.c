@@ -1251,6 +1251,18 @@ static void Cmd_ExecScript( const char *filename )
 	Mem_Free( f );
 }
 
+#if XASH_PS3
+// PS3 uses its own config filenames so a PC Half-Life config.cfg/userconfig.cfg/
+// video.cfg left in the same gamedir is never read or overwritten
+static const char *PS3_RemapConfigName( const char *name )
+{
+	if( !Q_stricmp( name, "config.cfg" ))     return "ps3config.cfg";
+	if( !Q_stricmp( name, "userconfig.cfg" )) return "ps3userconfig.cfg";
+	if( !Q_stricmp( name, "video.cfg" ))      return "ps3video.cfg";
+	return name;
+}
+#endif
+
 /*
 ===============
 Cmd_UnprivilegedExec_f
@@ -1334,6 +1346,14 @@ static void Cmd_Exec_f( void )
 	Q_strncpy( cfgpath, Cmd_Argv( 1 ), sizeof( cfgpath ));
 	COM_DefaultExtension( cfgpath, ".cfg", sizeof( cfgpath ));
 
+#if XASH_PS3
+	{
+		const char *remap = PS3_RemapConfigName( cfgpath );
+		if( remap != cfgpath )
+			Q_strncpy( cfgpath, remap, sizeof( cfgpath ));
+	}
+#endif
+
 	if( Q_strpbrk( cfgpath, "*?" ))
 	{
 		search_t *search = FS_Search( cfgpath, true, false );
@@ -1358,7 +1378,11 @@ static void Cmd_Exec_f( void )
 	if( SV_GetMaxClients() == 1 && !Q_stricmp( "game.cfg", cfgpath ))
 		return;
 
+#if XASH_PS3
+	if( !Q_stricmp( "ps3config.cfg", cfgpath ))
+#else
 	if( !Q_stricmp( "config.cfg", cfgpath ))
+#endif
 		host.config_executed = true;
 
 	Con_Printf( "execing " S_GREEN "%s" S_DEFAULT "\n", Cmd_Argv( 1 ));

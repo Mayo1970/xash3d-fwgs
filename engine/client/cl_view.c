@@ -569,6 +569,9 @@ void V_PostRender( void )
 		R_ShowTree();
 		Con_DrawConsole();
 		UI_UpdateMenu( host.realtime );
+#if XASH_PS3
+		PS3_MenuDrawCursor();
+#endif
 		Con_DrawVersion();
 		Con_DrawDebug(); // must be last
 		Touch_Draw();

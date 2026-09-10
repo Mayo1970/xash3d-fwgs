@@ -51,8 +51,6 @@ extern "C" void *Sys_GetNativeObject(const char *obj);
 bool FileSystem_Init()
 {
 	g_pFileSystem = (IFileSystem *)Sys_GetNativeObject(FILESYSTEM_INTERFACE_VERSION);
-	// CS-4 diagnostic, remove once the map-load hang is closed
-	CONSOLE_ECHO("[cs4] FileSystem_Init: g_pFileSystem=%p\n", (void *)g_pFileSystem);
 	if (!g_pFileSystem)
 	{
 		Sys_Error("Can not retrive filesystem interface version '" FILESYSTEM_INTERFACE_VERSION "'.");

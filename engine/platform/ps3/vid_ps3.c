@@ -42,10 +42,25 @@ GNU General Public License for more details.
 #define PS3_SCREEN_WIDTH  1280
 #define PS3_SCREEN_HEIGHT 720
 
-// Values match tools/ps3_video, hardware-validated -- rsx.h's own doc-comment
-// defaults (64KB CB / 1MB host) failed on real hardware.
+// The command-buffer size is hardware-validated -- rsx.h's own doc-comment
+// defaults (64KB CB / 1MB host) failed on real hardware, and 1 MB is what
+// tools/ps3_video and the sibling ioQuake3-PS3 port both use.
+//
+// The IO buffer is a different story. It is XDR (main RAM) mapped for RSX, and
+// rsxInit only carves the command buffer out of it. Nothing in this port ever
+// places anything else there: every RSX-visible surface comes from rsxMemalign
+// (GDDR3 -- color/depth buffers, textures, shader ucode, ps3gl's vertex ring),
+// and ps3gl's host ring maps its own separate allocation through
+// gcmMapMainMemory. So the 32 MB inherited from the PSL1GHT samples parked
+// 31 MB of a ~190 MB console for a 1 MB command buffer. ioQuake3-PS3 can afford
+// that; a Counter-Strike map load cannot.
+//
+// 8 MB keeps 7 MB of slack over the command buffer for anything gcmInitBody
+// reserves internally, stays 1 MB-aligned as gcm requires, and returns 24 MB
+// to the heap. If a hardware round ever shows RSX init failing or IO-space
+// exhaustion, step this back up (16 MB, then 32 MB) rather than shrinking it.
 #define PS3_RSX_CB_SIZE    ( 1 * 1024 * 1024 )
-#define PS3_RSX_HOST_SIZE  ( 32 * 1024 * 1024 )
+#define PS3_RSX_HOST_SIZE  ( 8 * 1024 * 1024 )
 // 3, not 2: with only 2 buffers, any frame exceeding one vsync interval gets
 // bumped a full extra tick, quantizing to a hard 30fps under GCM_FLIP_VSYNC.
 // Matches the sibling ioQuake3-PS3 port's RSX_FB_COUNT.
@@ -208,7 +223,10 @@ static qboolean PS3_RSX_Init( void )
 	}
 
 	ret = rsxInit( &ps3_gcm_context, PS3_RSX_CB_SIZE, PS3_RSX_HOST_SIZE, ps3_rsx_host_addr );
-	Con_Printf( "PS3_RSX_Init: rsxInit ret=%d context=%p\n", (int)ret, (void *)ps3_gcm_context );
+	Con_Printf( "PS3_RSX_Init: rsxInit ret=%d context=%p (cb %u Mb, io %u Mb)\n",
+		(int)ret, (void *)ps3_gcm_context,
+		(unsigned int)( PS3_RSX_CB_SIZE / ( 1024 * 1024 )),
+		(unsigned int)( PS3_RSX_HOST_SIZE / ( 1024 * 1024 )));
 	if( ret != 0 || !ps3_gcm_context )
 		return false;
 
@@ -277,6 +295,10 @@ static qboolean PS3_RSX_Init( void )
 	ps3_current_fb = 0;
 	ps3_rsx_ready = true;
 	Con_Printf( "PS3_RSX_Init: ready, %ux%u\n", ps3_display_width, ps3_display_height );
+
+	// brackets the one XDR reservation the renderer makes, so the boot probe and
+	// this one bound how much main RAM the RSX bring-up actually costs
+	PS3_ProbeMemory( "after RSX init" );
 
 	return true;
 }

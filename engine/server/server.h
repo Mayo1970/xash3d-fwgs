@@ -704,4 +704,9 @@ int SV_LightForEntity( edict_t *pEdict );
 //
 void SV_SourceQuery_HandleConnnectionlessPacket( const char *c, netadr_t from );
 
+#if XASH_PS3
+// sv_init.c -- registers the PS3_DIAG arming cvars early enough for userconfig.cfg
+void SV_PS3DiagInit( void );
+#endif
+
 #endif//SERVER_H

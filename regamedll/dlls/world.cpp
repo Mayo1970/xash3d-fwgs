@@ -308,18 +308,14 @@ void CWorld::Precache()
 		pSoundEnt->Spawn();
 	}
 #endif
-	CONSOLE_ECHO("[cs4] world: gamerules installed\n");
 	InitBodyQue();
-	CONSOLE_ECHO("[cs4] world: body queue done\n");
 
 	// init sentence group playback stuff from sentences.txt.
 	// ok to call this multiple times, calls after first are ignored.
 	SENTENCEG_Init();
-	CONSOLE_ECHO("[cs4] world: SENTENCEG_Init done\n");
 
 	// init texture type array from materials.txt
 	TEXTURETYPE_Init();
-	CONSOLE_ECHO("[cs4] world: TEXTURETYPE_Init done\n");
 
 	// the area based ambient sounds MUST be the first precache_sounds
 	// player precaches

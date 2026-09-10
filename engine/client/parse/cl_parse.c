@@ -167,7 +167,9 @@ static void CL_ParseSignon( sizebuf_t *msg, connprotocol_t proto )
 
 	if( i <= cls.signon )
 	{
-		Con_Reportf( S_ERROR "received signon %i when at %i\n", i, cls.signon );
+		// this used to be Con_Reportf, i.e. invisible unless developer >= 2,
+		// which made a real drop look like a spontaneous return to the menu
+		Con_Printf( S_ERROR "received signon %i when at %i\n", i, cls.signon );
 		CL_Disconnect();
 		return;
 	}
@@ -817,7 +819,7 @@ static void CL_ParseServerData( sizebuf_t *msg, connprotocol_t proto )
 		MSG_ReadBytes( msg, clientdllmd5, sizeof( clientdllmd5 ), sizeof( clientdllmd5 ));
 		cl.maxclients = MSG_ReadByte( msg );
 		cl.playernum = MSG_ReadByte( msg );
-		COM_UnMunge3((byte *)&cl.checksum, sizeof( cl.checksum ), ( 0xff - cl.playernum ) & 0xff );
+		cl.checksum = COM_UnMunge3Long( cl.checksum, ( 0xff - cl.playernum ) & 0xff );
 
 		MSG_SeekToBit( msg, sizeof( uint8_t ) << 3, SEEK_CUR ); // quake leftover, coop flag
 
@@ -872,7 +874,8 @@ static void CL_ParseServerData( sizebuf_t *msg, connprotocol_t proto )
 	}
 
 	Q_snprintf( mapfile, sizeof( mapfile ), "maps/%s.bsp", clgame.mapname );
-	if( CRC32_MapFile( &cl.worldmapCRC, mapfile, cl.maxclients > 1 ))
+	cl.worldmapCRC_valid = CRC32_MapFile( &cl.worldmapCRC, mapfile, cl.maxclients > 1 );
+	if( cl.worldmapCRC_valid )
 	{
 		// validate map checksum
 		if( cl.worldmapCRC != cl.checksum )
@@ -1506,6 +1509,27 @@ static const char *CL_CheckTypeToString( int check_type )
 	return "unknown";
 }
 
+/*
+==================
+CL_WriteConsistencyBounds
+
+The consistency reply carries three little-endian IEEE floats per vector.
+MSG_WriteBytes is a raw memory copy -- correct for opaque byte arrays like an
+MD5 hash, but on a big-endian host it puts big-endian floats on the wire, and
+every bounds check on a real GoldSrc server then fails. MSG_WriteFloat goes
+through the bit writer, which emits the IEEE pattern LSB-first on both hosts.
+
+A listen server hides this: it decodes with the mirrored MSG_ReadBytes, so both
+sides byteswap identically and agree. Only a remote server sees the mismatch.
+==================
+*/
+static void CL_WriteConsistencyBounds( sizebuf_t *msg, const vec3_t v )
+{
+	MSG_WriteFloat( msg, v[0] );
+	MSG_WriteFloat( msg, v[1] );
+	MSG_WriteFloat( msg, v[2] );
+}
+
 static void CL_SendConsistencyInfo( sizebuf_t *msg, connprotocol_t proto )
 {
 	byte md5[16] = { 0 };
@@ -1524,6 +1548,9 @@ static void CL_SendConsistencyInfo( sizebuf_t *msg, connprotocol_t proto )
 
 	FS_AllowDirectPaths( true );
 
+	// NOTE: no CL_LoadingKeepAlive() in this loop even though it blocks for
+	// seconds -- we are writing into msg, and transmitting mid-build would
+	// ship a truncated clc_fileconsistency
 	for( int i = 0; i < cl.num_consistency; i++ )
 	{
 		qboolean have_file = true;
@@ -1583,8 +1610,8 @@ static void CL_SendConsistencyInfo( sizebuf_t *msg, connprotocol_t proto )
 				VectorCopy( mins, maxs );
 			}
 
-			MSG_WriteBytes( msg, mins, 12 );
-			MSG_WriteBytes( msg, maxs, 12 );
+			CL_WriteConsistencyBounds( msg, mins );
+			CL_WriteConsistencyBounds( msg, maxs );
 			break;
 		case force_model_samebounds:
 		case force_model_specifybounds:
@@ -1595,15 +1622,8 @@ static void CL_SendConsistencyInfo( sizebuf_t *msg, connprotocol_t proto )
 				VectorSet( mins, -9999.9f, -9999.9f, -9999.9f );
 				VectorSet( maxs, 9999.9f, 9999.9f, 9999.9f );
 			}
-#if XASH_PS3
-			// [cs5] pairs with server's "[cs5] consistency idx" line
-			Con_Printf( "[cs5] reply idx %d ft %d %s: (%g %g %g)..(%g %g %g)%s\n",
-				pc->orig_index, pc->check_type, filename,
-				mins[0], mins[1], mins[2], maxs[0], maxs[1], maxs[2],
-				user_changed_diskfile ? " (crc mismatch -> poisoned)" : "" );
-#endif
-			MSG_WriteBytes( msg, mins, 12 );
-			MSG_WriteBytes( msg, maxs, 12 );
+			CL_WriteConsistencyBounds( msg, mins );
+			CL_WriteConsistencyBounds( msg, maxs );
 			break;
 		default:
 			Host_Error( "Unknown consistency type %i\n", pc->check_type );
@@ -1741,11 +1761,11 @@ void CL_RegisterResources( sizebuf_t *msg, connprotocol_t proto )
 			MSG_BeginClientCmd( msg, clc_stringcmd );
 			if( proto == PROTO_GOLDSRC )
 			{
-				int32_t crc = cl.worldmapCRC;
-				COM_Munge2((byte*)&crc, sizeof( crc ), ( 0xff - cl.servercount ) & 0xff );
-				MSG_WriteStringf( msg, "spawn %i %i", cl.servercount, crc );
+				uint32_t crc = COM_Munge2Long( cl.worldmapCRC, ( 0xff - cl.servercount ) & 0xff );
+				MSG_WriteStringf( msg, "spawn %i %i", cl.servercount, (int32_t)crc );
 			}
 			else MSG_WriteStringf( msg, "spawn %i", cl.servercount );
+
 		}
 	}
 	else

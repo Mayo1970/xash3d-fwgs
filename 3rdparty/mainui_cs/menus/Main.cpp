@@ -254,6 +254,10 @@ void CMenuMain::_Init( void )
 	if ( gMenu.m_gameinfo.gamemode == GAME_SINGLEPLAYER_ONLY )
 		multiPlayer.SetGrayed( true );
 
+	// xashPS3: CS flavor has no hazard course or save/load
+	hazardCourse.SetGrayed( true );
+	saveRestore.SetGrayed( true );
+
 	// if ( gMenu.m_gameinfo.gamemode == GAME_MULTIPLAYER_ONLY )
 	// {
 	// 	saveRestore.SetGrayed( true );

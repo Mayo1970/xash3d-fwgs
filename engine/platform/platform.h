@@ -291,15 +291,26 @@ void Platform_SetClipboardText( const char *buffer );
 static inline void Platform_PreCreateMove( void ) { }
 static inline void GAME_EXPORT Platform_SetMousePos( int x, int y ) { }
 static inline void Platform_SetMouseGrab( qboolean enable ) { }
-static inline void Platform_SetCursorType( VGUI_DefaultCursor type ) { }
 static inline int Platform_GetClipboardText( char *buffer, size_t size ) { return 0; }
 static inline void Platform_SetClipboardText( const char *buffer ) { }
 static inline qboolean Platform_GetMouseGrab( void ) { return false; }
+#if XASH_PS3
+// real implementations in in_ps3.c -- feed the right-stick menu cursor, and
+// track whether the native menu or a VGUI1 panel currently wants it shown
+// (VGui_IsActive()-driven callers, e.g. vgui_draw.c's VGUI_CursorSelect,
+// call Platform_SetCursorType per-panel; without a real PS3 implementation
+// here this was silently dropped, so PS3_UpdateMenuCursor/PS3_CursorVisible
+// only ever saw the native-menu key_dest transition, never a VGUI1 panel).
+void GAME_EXPORT Platform_GetMousePos( int *x, int *y );
+void Platform_SetCursorType( VGUI_DefaultCursor type );
+#else
 static inline void GAME_EXPORT Platform_GetMousePos( int *x, int *y )
 {
 	if( x ) *x = 0;
 	if( y ) *y = 0;
 }
+static inline void Platform_SetCursorType( VGUI_DefaultCursor type ) { }
+#endif
 #endif
 
 #if XASH_SDL || XASH_DOS || XASH_PS3
@@ -407,6 +418,7 @@ void IN_EvdevFrame ( void );
 #if XASH_PS3
 void PS3_InputInit( void );
 void PS3_InputShutdown( void );
+void PS3_MenuDrawCursor( void );
 #endif // XASH_PS3
 /*
 ==============================================================================

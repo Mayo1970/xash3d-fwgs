@@ -124,8 +124,15 @@ void SV_ParseConsistencyResponse( sv_client_t *cl, sizebuf_t *msg )
 			byte		resbuffer[32];
 			FORCE_TYPE	ft;
 
-			MSG_ReadBytes( msg, cmins, sizeof( cmins ), sizeof( cmins ));
-			MSG_ReadBytes( msg, cmaxs, sizeof( cmaxs ), sizeof( cmaxs ));
+			// the client sends three little-endian IEEE floats per vector.
+			// MSG_ReadBytes is a raw memory copy, so on a big-endian host it
+			// would byteswap them back into agreement with our own broken
+			// writer and disagree with every real GoldSrc client. Mirror
+			// CL_WriteConsistencyBounds and decode them properly.
+			for( int i = 0; i < 3; i++ )
+				cmins[i] = MSG_ReadFloat( msg );
+			for( int i = 0; i < 3; i++ )
+				cmaxs[i] = MSG_ReadFloat( msg );
 
 			memcpy( resbuffer, r->rguc_reserved, 32 );
 			ft = resbuffer[0];
@@ -152,15 +159,6 @@ void SV_ParseConsistencyResponse( sv_client_t *cl, sizebuf_t *msg )
 				}
 				break;
 			}
-
-#if XASH_PS3
-			// [cs5] pairs with client's "[cs5] reply idx" line
-			Con_Printf( "[cs5] consistency idx %d ft %d %s: got (%g %g %g)..(%g %g %g) want (%g %g %g)..(%g %g %g)%s\n",
-				idx, ft, r->szFileName,
-				cmins[0], cmins[1], cmins[2], cmaxs[0], cmaxs[1], cmaxs[2],
-				mins[0], mins[1], mins[2], maxs[0], maxs[1], maxs[2],
-				badresindex == idx + 1 ? "  <== BAD" : "" );
-#endif
 
 			switch( ft )
 			{

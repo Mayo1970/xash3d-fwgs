@@ -1399,12 +1399,19 @@ void Host_WriteConfig( void )
 
 	if( !clgame.hInstance || Sys_CheckParm( "-nowriteconfig" ) ) return;
 
+#if XASH_PS3
+	const char *cfgname = "ps3config.cfg";
+	const char *ucfgname = "ps3userconfig.cfg";
+#else
+	const char *cfgname = "config.cfg";
+	const char *ucfgname = "userconfig.cfg";
+#endif
 
-	file_t *f = FS_Open( "config.cfg.new", "w", false );
+	file_t *f = FS_Open( va( "%s.new", cfgname ), "w", false );
 	if( f )
 	{
 		Con_Reportf( "%s()\n", __func__ );
-		Host_InitializeConfig( f, "config.cfg", "archive of cvars" );
+		Host_InitializeConfig( f, cfgname, "archive of cvars" );
 		Key_WriteBindings( f );
 		Cvar_WriteVariables( f, FCVAR_ARCHIVE );
 		Info_WriteVars( f );
@@ -1421,11 +1428,11 @@ void Host_WriteConfig( void )
 		if( jlook && ( jlook->state & 1 ))
 			FS_Printf( f, "+jlook\n" );
 
-		FS_Printf( f, "exec userconfig.cfg\n" );
+		FS_Printf( f, "exec %s\n", ucfgname );
 
-		Host_FinalizeConfig( f, "config.cfg" );
+		Host_FinalizeConfig( f, cfgname );
 	}
-	else Con_DPrintf( S_ERROR "Couldn't write config.cfg.\n" );
+	else Con_DPrintf( S_ERROR "Couldn't write %s.\n", cfgname );
 
 	NET_SaveMasters();
 
@@ -1501,15 +1508,21 @@ void Host_WriteVideoConfig( void )
 	if( Sys_CheckParm( "-nowriteconfig" ) )
 		return;
 
-	file_t *f = FS_Open( "video.cfg.new", "w", false );
+#if XASH_PS3
+	const char *vidname = "ps3video.cfg";
+#else
+	const char *vidname = "video.cfg";
+#endif
+
+	file_t *f = FS_Open( va( "%s.new", vidname ), "w", false );
 	if( f )
 	{
 		Con_Reportf( "%s()\n", __func__ );
-		Host_InitializeConfig( f, "video.cfg", "archive of renderer variables" );
+		Host_InitializeConfig( f, vidname, "archive of renderer variables" );
 		Cvar_WriteVariables( f, FCVAR_RENDERINFO );
-		Host_FinalizeConfig( f, "video.cfg" );
+		Host_FinalizeConfig( f, vidname );
 	}
-	else Con_DPrintf( S_ERROR "can't update video.cfg.\n" );
+	else Con_DPrintf( S_ERROR "can't update %s.\n", vidname );
 }
 #endif // XASH_DEDICATED
 

@@ -515,12 +515,9 @@ CHalfLifeMultiplay::CHalfLifeMultiplay()
 #ifndef CSTRIKE
 	InstallBotControl();
 #endif
-	CONSOLE_ECHO("[cs4] rules: bot control installed\n");
 
 	InstallHostageManager();
-	CONSOLE_ECHO("[cs4] rules: hostage manager installed\n");
 	InstallCommands();
-	CONSOLE_ECHO("[cs4] rules: commands installed\n");
 
 	m_bSkipSpawn = m_bInCareerGame;
 
@@ -542,7 +539,6 @@ CHalfLifeMultiplay::CHalfLifeMultiplay()
 	}
 
 	InstallTutor(CVAR_GET_FLOAT("tutor_enable") != 0.0f);
-	CONSOLE_ECHO("[cs4] rules: tutor installed, ctor complete\n");
 
 	m_bSkipShowMenu = false;
 	m_bNeededPlayers = false;

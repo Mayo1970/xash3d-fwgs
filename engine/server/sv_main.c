@@ -880,6 +880,11 @@ void SV_Init( void )
 
 	SV_InitHostCommands();
 
+#if XASH_PS3
+	// before the config exec in Host_Init, so sv_ps3diag_map can be set there
+	SV_PS3DiagInit();
+#endif
+
 	Cvar_Getf( "protocol", FCVAR_READ_ONLY, "displays server protocol version", "%i", PROTOCOL_VERSION );
 	Cvar_Get( "suitvolume", "0.25", FCVAR_ARCHIVE, "HEV suit volume" );
 	Cvar_Get( "gamedir", GI->gamefolder, FCVAR_READ_ONLY, "game folder" );
