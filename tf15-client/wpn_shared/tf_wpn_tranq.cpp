@@ -107,8 +107,9 @@ void CTFTranq::PrimaryAttack( void )
 	UTIL_MakeVectors( m_pPlayer->pev->v_angle );
 	p_vecAngles = m_pPlayer->pev->v_angle;
 	p_vecOrigin = m_pPlayer->GetGunPosition();
-	// Velaron: TODO
-	// CTFNailgunNail::CreateTranqNail( &p_vecOrigin, &p_vecAngles, m_pPlayer, this );
+#ifndef CLIENT_DLL
+	CTFNailgunNail::CreateTranqNail( p_vecOrigin, p_vecAngles, m_pPlayer );
+#endif
 	DB_LogShots( 1 );
 	m_pPlayer->ammo_shells--;
 	m_flTimeWeaponIdle = 12.5f;

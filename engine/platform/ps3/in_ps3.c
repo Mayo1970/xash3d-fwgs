@@ -141,11 +141,11 @@ static void PS3_SeedKeyboardBinds( void )
 
 	if( is_tfc )
 	{
-		// L1 primes/throws the hand grenade, R1 the class grenade. Weapon-next
-		// stays on D-pad Right. +gren1/+gren2 are unknown to the engine and get
-		// forwarded to the TFC server DLL.
+		// L1/R1 prime+throw grenades 1/2 (forwarded to the server DLL). R3 is the
+		// class special (detpipe, rocket reload, ...) instead of the flashlight.
 		PS3_ModRebind( K_L1_BUTTON, "lastinv", "+gren1" );
 		PS3_ModRebind( K_R1_BUTTON, "invnext", "+gren2" );
+		PS3_ModRebind( K_RSTICK,    "impulse 100", "special" );
 	}
 }
 

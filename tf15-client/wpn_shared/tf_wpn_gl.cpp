@@ -169,8 +169,10 @@ void CTFGrenadeLauncher::PrimaryAttack( void )
 		UTIL_MakeVectors( m_pPlayer->pev->v_angle );
 		p_VecOrigin = m_pPlayer->GetGunPosition() + gpGlobals->v_right * 8.0f + gpGlobals->v_up * -16.0f;
 		p_VecAngles = m_pPlayer->pev->v_angle;
-		// Velaron: TODO
-		//CTFGrenade::CreateTFGrenade( &p_VecOrigin, &p_VecAngles, m_pPlayer, this );
+#ifndef CLIENT_DLL
+		CTFGrenade::CreateTFGrenade( p_VecOrigin, p_VecAngles, m_pPlayer );
+#endif
+		DB_LogShots( 1 );
 		m_fInSpecialReload = 0;
 		m_pPlayer->tfstate &= ~TFSTATE_RELOADING;
 		m_flNextSecondaryAttack = 0.6f;
@@ -234,8 +236,10 @@ void CTFPipebombLauncher::PrimaryAttack( void )
 		UTIL_MakeVectors( m_pPlayer->pev->v_angle );
 		p_VecOrigin = m_pPlayer->GetGunPosition() + gpGlobals->v_right * 8.0f + gpGlobals->v_up * -16.0f;
 		p_VecAngles = m_pPlayer->pev->v_angle;
-		// Velaron: TODO
-		//CTFGrenade::CreateTFPipebomb( &p_VecOrigin, &p_VecAngles, m_pPlayer, this );
+#ifndef CLIENT_DLL
+		CTFGrenade::CreateTFPipebomb( p_VecOrigin, p_VecAngles, m_pPlayer );
+#endif
+		DB_LogShots( 1 );
 		m_fInSpecialReload = 0;
 		m_pPlayer->tfstate &= ~TFSTATE_RELOADING;
 		m_iClip--;

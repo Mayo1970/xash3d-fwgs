@@ -1,22 +1,5 @@
-/*
-Copyright (C) 1997-2001 Id Software, Inc.
-
-This program is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License
-as published by the Free Software Foundation; either version 2
-of the License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  
-
-See the GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
-
-*/
+// Copyright (C) 1997-2001 Id Software, Inc.
+// GPL v2 or later, WITHOUT ANY WARRANTY; see the GNU General Public License.
 
 #include "Framework.h"
 #include "keydefs.h"
@@ -86,11 +69,6 @@ private:
 	void _VidInit() override;
 };
 
-/*
-=================
-CMenuCreateGame::Begin
-=================
-*/
 void CMenuCreateGame::Begin( CMenuBaseItem *pSelf, void *pExtra )
 {
 	CMenuCreateGame *menu = (CMenuCreateGame*)pSelf->Parent();
@@ -119,9 +97,9 @@ void CMenuCreateGame::Begin( CMenuBaseItem *pSelf, void *pExtra )
 
 	EngFuncs::PlayBackgroundTrack( NULL, NULL );
 
-	// all done, start server
+	// No WriteServerConfig: it dumped engine-default cvars over retail listenserver.cfg,
+	// so sv_maxspeed 500 became 320 and capped Scout speed.
 	const char *listenservercfg = EngFuncs::GetCvarString( "lservercfgfile" );
-	EngFuncs::WriteServerConfig( listenservercfg );
 
 	char cmd[1024];
 	snprintf( cmd, sizeof( cmd ), "exec %s\n", listenservercfg );
@@ -137,11 +115,6 @@ void CMenuCreateGame::Begin( CMenuBaseItem *pSelf, void *pExtra )
 	EngFuncs::ClientCmd( FALSE, cmd );
 }
 
-/*
-=================
-CMenuMapListModel::Update
-=================
-*/
 void CMenuMapListModel::Update( void )
 {
 	char *afile;
@@ -190,11 +163,6 @@ void CMenuMapListModel::Update( void )
 	uiStatic.needMapListUpdate = false;
 }
 
-/*
-=================
-CMenuCreateGame::Init
-=================
-*/
 void CMenuCreateGame::_Init( void )
 {
 	uiStatic.needMapListUpdate = true;

@@ -1,30 +1,13 @@
-/***
-*
-*	Copyright (c) 1996-2002, Valve LLC. All rights reserved.
-*	
-*	This product contains software technology licensed from Id 
-*	Software, Inc. ("Id Technology").  Id Technology (c) 1996 Id Software, Inc. 
-*	All Rights Reserved.
-*
-*   Use, distribution, and modification of this source code and/or resulting
-*   object code is restricted to non-commercial enhancements to products from
-*   Valve LLC.  All other use, distribution, or modification is prohibited
-*   without written permission from Valve LLC.
-*
-****/
-/*
-
-===== buttons.cpp ========================================================
-
-  button-related code
-
-*/
+// Copyright (c) 1996-2002, Valve LLC. Contains Id Technology (c) 1996 Id Software, Inc.
+// Non-commercial Valve product enhancements only. buttons.cpp: button-related code.
 
 #include "extdll.h"
 #include "util.h"
 #include "cbase.h"
 #include "saverestore.h"
 #include "doors.h"
+#include "player.h"
+#include "tf_defs.h"
 
 #define SF_BUTTON_DONTMOVE		1
 #define SF_ROTBUTTON_NOTSOLID		1
@@ -134,9 +117,7 @@ IMPLEMENT_SAVERESTORE( CMultiSource, CBaseEntity )
 
 LINK_ENTITY_TO_CLASS( multisource, CMultiSource )
 
-//
 // Cache user-entity-field values until spawn is called.
-//
 void CMultiSource::KeyValue( KeyValueData *pkvd )
 {
 	if( FStrEq( pkvd->szKeyName, "style" ) ||
@@ -369,9 +350,7 @@ void CBaseButton::Precache( void )
 	}
 }
 
-//
 // Cache user-entity-field values until spawn is called.
-//
 void CBaseButton::KeyValue( KeyValueData *pkvd )
 {
 	if( FStrEq( pkvd->szKeyName, "changetarget" ) )
@@ -408,15 +387,21 @@ void CBaseButton::KeyValue( KeyValueData *pkvd )
 		CBaseToggle::KeyValue( pkvd );
 }
 
-//
 // ButtonShot
-//
 int CBaseButton::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, float flDamage, int bitsDamageType )
 {
 	BUTTON_CODE code = ButtonResponseToTouch();
 
 	if( code == BUTTON_NOTHING )
 		return 0;
+
+	if( goal_activation & TFGA_SPANNER )
+		return 0;
+
+	if( FClassnameIs( pevAttacker, "player" )
+	    && !ActivationSucceeded( this, (CBasePlayer *)CBaseEntity::Instance( pevAttacker ), NULL ) )
+		return 0;
+
 	// Temporarily disable the touch function, until movement is finished.
 	SetTouch( NULL );
 
@@ -439,23 +424,8 @@ int CBaseButton::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, fl
 	return 0;
 }
 
-/*QUAKED func_button (0 .5 .8) ?
-When a button is touched, it moves some distance in the direction of it's angle,
-triggers all of it's targets, waits some time, then returns to it's original position
-where it can be triggered again.
-
-"angle"		determines the opening direction
-"target"	all entities with a matching targetname will be used
-"speed"		override the default 40 speed
-"wait"		override the default 1 second wait (-1 = never return)
-"lip"		override the default 4 pixel lip remaining at end of move
-"health"	if set, the button must be killed instead of touched
-"sounds"
-0) steam metal
-1) wooden clunk
-2) metallic click
-3) in-out
-*/
+// func_button: when touched, moves along its angle, fires its targets, waits, then returns.
+// Defaults: speed 40, wait 1 (-1 = never return), lip 4. "health" means it must be shot.
 
 LINK_ENTITY_TO_CLASS( func_button, CBaseButton )
 
@@ -463,10 +433,8 @@ void CBaseButton::Spawn()
 { 
 	const char *pszSound;
 
-	//----------------------------------------------------
 	//determine sounds for buttons
 	//a sound of 0 should not make a sound
-	//----------------------------------------------------
 	pszSound = ButtonSound( m_sounds );
 	PRECACHE_SOUND( pszSound );
 	pev->noise = MAKE_STRING( pszSound );
@@ -602,9 +570,7 @@ const char *ButtonSound( int sound )
 	return pszSound;
 }
 
-//
 // Makes flagged buttons spark when turned off
-//
 void DoSpark( entvars_t *pev, const Vector &location )
 {
 	Vector tmp = location + pev->size * 0.5f;
@@ -642,14 +608,20 @@ void CBaseButton::ButtonSpark( void )
 	DoSpark( pev, pev->mins );
 }
 
-//
 // Button's Use function
-//
 void CBaseButton::ButtonUse( CBaseEntity *pActivator, CBaseEntity *pCaller, USE_TYPE useType, float value )
 {
 	// Ignore touches if button is moving, or pushed-in and waiting to auto-come-out.
 	// UNDONE: Should this use ButtonResponseToTouch() too?
 	if( m_toggle_state == TS_GOING_UP || m_toggle_state == TS_GOING_DOWN )
+		return;
+
+	// Spanner buttons only answer CTFSpanner::AxeHit, which uses them with value 8.
+	if( ( goal_activation & TFGA_SPANNER ) && value != 8.0f )
+		return;
+
+	if( ( !pActivator || pActivator->Classify() == CLASS_PLAYER )
+	    && !ActivationSucceeded( this, (CBasePlayer *)pActivator, NULL ) )
 		return;
 
 	m_hActivator = pActivator;
@@ -688,13 +660,17 @@ CBaseButton::BUTTON_CODE CBaseButton::ButtonResponseToTouch( void )
 	return BUTTON_NOTHING;
 }
 
-//
 // Touching a button simply "activates" it.
-//
 void CBaseButton::ButtonTouch( CBaseEntity *pOther )
 {
 	// Ignore touches by anything but players
 	if( !pOther->IsPlayer() )
+		return;
+
+	if( goal_activation & TFGA_SPANNER )
+		return;
+
+	if( !ActivationSucceeded( this, (CBasePlayer *)pOther, NULL ) )
 		return;
 
 	m_hActivator = pOther;
@@ -724,9 +700,7 @@ void CBaseButton::ButtonTouch( CBaseEntity *pOther )
 		ButtonActivate();
 }
 
-//
 // Starts the button moving "in/up".
-//
 void CBaseButton::ButtonActivate()
 {
 	EMIT_SOUND( ENT( pev ), CHAN_VOICE, STRING( pev->noise ), 1, ATTN_NORM );
@@ -753,9 +727,7 @@ void CBaseButton::ButtonActivate()
 		AngularMove( m_vecAngle2, pev->speed );
 }
 
-//
 // Button has reached the "in/up" position.  Activate its "targets", and pause before "popping out".
-//
 void CBaseButton::TriggerAndWait( void )
 {
 	ASSERT( m_toggle_state == TS_GOING_UP );
@@ -788,9 +760,7 @@ void CBaseButton::TriggerAndWait( void )
 	SUB_UseTargets( m_hActivator, USE_TOGGLE, 0 );
 }
 
-//
 // Starts the button moving "out/down".
-//
 void CBaseButton::ButtonReturn( void )
 {
 	ASSERT( m_toggle_state == TS_AT_TOP );
@@ -805,9 +775,7 @@ void CBaseButton::ButtonReturn( void )
 	pev->frame = 0;			// use normal textures
 }
 
-//
 // Button has returned to start state.  Quiesce it.
-//
 void CBaseButton::ButtonBackHome( void )
 {
 	ASSERT( m_toggle_state == TS_GOING_DOWN );
@@ -856,9 +824,7 @@ void CBaseButton::ButtonBackHome( void )
 	}
 }
 
-//
 // Rotating button (aka "lever")
-//
 class CRotButton : public CBaseButton
 {
 public:
@@ -870,10 +836,8 @@ LINK_ENTITY_TO_CLASS( func_rot_button, CRotButton )
 void CRotButton::Spawn( void )
 {
 	const char *pszSound;
-	//----------------------------------------------------
 	//determine sounds for buttons
 	//a sound of 0 should not make a sound
-	//----------------------------------------------------
 	pszSound = ButtonSound( m_sounds );
 	PRECACHE_SOUND( pszSound );
 	pev->noise = MAKE_STRING( pszSound );
@@ -925,10 +889,8 @@ void CRotButton::Spawn( void )
 	//SetTouch( &ButtonTouch );
 }
 
-// Make this button behave like a door (HACKHACK)
-// This will disable use and make the button solid
-// rotating buttons were made SOLID_NOT by default since their were some
-// collision problems with them...
+// Makes this button behave like a door (HACKHACK): disables use and makes it solid.
+// Rotating buttons default to SOLID_NOT because of collision problems.
 #define SF_MOMENTARY_DOOR		0x0001
 
 class CMomentaryRotButton : public CBaseToggle
@@ -1037,9 +999,8 @@ void CMomentaryRotButton::PlaySound( void )
 	EMIT_SOUND( ENT( pev ), CHAN_VOICE, STRING( pev->noise ), 1, ATTN_NORM );
 }
 
-// BUGBUG: This design causes a latentcy.  When the button is retriggered, the first impulse
-// will send the target in the wrong direction because the parameter is calculated based on the
-// current, not future position.
+// BUGBUG: latency. On retrigger the first impulse sends the target the wrong way, because
+// the parameter comes from the current position, not the future one.
 void CMomentaryRotButton::Use( CBaseEntity *pActivator, CBaseEntity *pCaller, USE_TYPE useType, float value )
 {
 	pev->ideal_yaw = CBaseToggle::AxisDelta( pev->spawnflags, pev->angles, m_start ) / m_flMoveDistance;
@@ -1172,9 +1133,7 @@ void CMomentaryRotButton::UpdateSelfReturn( float value )
 	}
 }
 
-//----------------------------------------------------------------
 // Spark
-//----------------------------------------------------------------
 
 class CEnvSpark : public CBaseEntity
 {

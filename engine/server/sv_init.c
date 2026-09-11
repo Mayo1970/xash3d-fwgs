@@ -888,17 +888,12 @@ static void SV_SetupClients( void )
 	// dedicated servers are can't be single player and are usually DM
 	if( Host_IsDedicated() )
 		svs.maxclients = bound( 4, svs.maxclients, MAX_CLIENTS );
-	// DEFAULT_MAX_LISTEN_CLIENTS is MAX_CLIENTS everywhere except platforms that
-	// genuinely can't host that many (see defaults.h). Only the listen-server
-	// branch is capped: the dedicated one above has a lower bound of 4, and a
-	// platform cap below that would make bound()'s range inverted for no gain,
-	// since no console target here builds a dedicated server.
+	// Only listen servers get the platform cap (defaults.h); a cap below the
+	// dedicated branch's floor of 4 would invert bound(), and no console builds dedicated.
 #if XASH_PS3
-	// TEST ONLY: raise the listen-server cap to 9 (8 bots + 1 host, true 4v4)
-	// for the cstrike flavor, to check PS3_ProbeMemory's contiguous-block
-	// headroom. Do not ship this -- see DEFAULT_MAX_LISTEN_CLIENTS's comment
-	// in defaults.h.
-	else if( !Q_stricmp( XASH_PS3_GAME, "cstrike" ) )
+	// TEST ONLY: cap 9 (8 + host, true 4v4) for cstrike and tfc; checks memory
+	// headroom, see DEFAULT_MAX_LISTEN_CLIENTS in defaults.h before shipping.
+	else if( !Q_stricmp( XASH_PS3_GAME, "cstrike" ) || !Q_stricmp( XASH_PS3_GAME, "tfc" ) )
 		svs.maxclients = bound( 1, svs.maxclients, 9 );
 #endif
 	else svs.maxclients = bound( 1, svs.maxclients, DEFAULT_MAX_LISTEN_CLIENTS );

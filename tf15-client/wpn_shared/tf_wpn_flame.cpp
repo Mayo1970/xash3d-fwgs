@@ -69,8 +69,9 @@ void CTFFlamethrower::PrimaryAttack( void )
 		}
 		else
 		{
-			// Velaron: TODO
-			//CTFFlamethrowerBurst::CreateBurst( &p_vecOrigin, &p_vecAngles, m_pPlayer, this );
+#ifndef CLIENT_DLL
+			CTFFlamethrowerBurst::CreateBurst( p_vecOrigin, p_vecAngles, m_pPlayer );
+#endif
 			DB_LogShots( 1 );
 			m_flNextPrimaryAttack = GetNextAttackDelay( 0.15f );
 			m_flTimeWeaponIdle = 0.15f;

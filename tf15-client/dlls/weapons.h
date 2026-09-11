@@ -415,13 +415,8 @@ public:
 	void EXPORT DetonateUse( CBaseEntity *pActivator, CBaseEntity *pCaller, USE_TYPE useType, float value );
 	void EXPORT TumbleThink( void );
 
-	// Neither had a definition anywhere in the server-only tree TFC-2
-	// vendored, and neither is ever called server-side (only referenced via
-	// CGrenade's own vtable) -- the "birthday" global they'd presumably feed
-	// (tfortmap.cpp sets it from a map trigger) is itself never read by
-	// anything server-side. TFC-3 found real (also no-op) definitions in
-	// cl_dll/tfc/tf_baseentity.cpp's client-only stub block -- same
-	// CLIENT_DLL gating as cbase.h's TeamFortress_* virtuals, same reason.
+	// No server definition existed and the server never calls them (vtable only);
+	// the client defines no-op ones in cl_dll/tfc/tf_baseentity.cpp.
 #ifndef CLIENT_DLL
 	virtual int setBirthdayModel( void ) { return 0; }
 	virtual void setModel( void ) { }
@@ -894,6 +889,9 @@ public:
 	void RocketTouch( CBaseEntity *pOther );
 	static CTFIncendiaryCRocket *CreateRpgRocket( Vector p_vecOrigin, Vector p_vecAngles, CBaseEntity *pOwner, CTFIncendiaryC *pLauncher );
 	void RadiusDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, float flDamage, int iClassIgnore, int bitsDamageType );
+#ifndef CLIENT_DLL
+	void EXPORT ICSmoke( void );
+#endif
 
 	int m_iTrail;
 };
@@ -989,5 +987,54 @@ public:
 private:
 	unsigned short m_usFireTranquilizer;
 };
+
+#ifndef CLIENT_DLL
+// TFC-6 Phase 3 projectiles, server only (dlls/tf_wpn_nails.cpp). The client
+// draws its own nails and flames from the weapon events.
+class CTFNailgunNail : public CBaseEntity
+{
+public:
+	void Spawn( void );
+	void Precache( void );
+	void EXPORT NailTouch( CBaseEntity *pOther );
+	void EXPORT TranqTouch( CBaseEntity *pOther );
+	void EXPORT RailgunNailTouch( CBaseEntity *pOther );
+
+	static CTFNailgunNail *CreateNail( Vector vecOrigin, Vector vecAngles, CBaseEntity *pOwner, BOOL bNoDraw );
+	static CTFNailgunNail *CreateSuperNail( Vector vecOrigin, Vector vecAngles, CBaseEntity *pOwner );
+	static CTFNailgunNail *CreateTranqNail( Vector vecOrigin, Vector vecAngles, CBaseEntity *pOwner );
+	static CTFNailgunNail *CreateRailgunNail( Vector vecOrigin, Vector vecAngles, CBaseEntity *pOwner );
+};
+
+// GL grenade and pipebomb: one class, the classname tells them apart.
+class CTFGrenade : public CGrenade
+{
+public:
+	void Spawn( void );
+	void Precache( void );
+	void EXPORT GrenadeTouch( CBaseEntity *pOther );
+	void EXPORT PipebombTouch( CBaseEntity *pOther );
+	void EXPORT GLDetonate( void );
+	void EXPORT PipebombDetonate( void );
+
+	static CTFGrenade *CreateTFGrenade( Vector vecOrigin, Vector vecAngles, CBaseEntity *pOwner );
+	static CTFGrenade *CreateTFPipebomb( Vector vecOrigin, Vector vecAngles, CBaseEntity *pOwner );
+
+	int m_iTrail;
+	float m_flCreationTime;
+	unsigned short m_usTFExplode;
+	BOOL m_bQuiet;
+};
+
+class CTFFlamethrowerBurst : public CBaseEntity
+{
+public:
+	void Spawn( void );
+	void Precache( void );
+	void EXPORT BurstTouch( CBaseEntity *pOther );
+
+	static CTFFlamethrowerBurst *CreateBurst( Vector vecOrigin, Vector vecAngles, CBaseEntity *pOwner );
+};
+#endif // CLIENT_DLL
 
 #endif // WEAPONS_H

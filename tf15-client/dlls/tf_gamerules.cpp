@@ -147,13 +147,7 @@ float CTeamFortress::FlItemRespawnTime( CItem *pItem )
 BOOL CTeamFortress::CanHaveItem( CBasePlayer *pPlayer, CItem *pItem )
 {
 	if ( !pPlayer->is_feigning && !( pPlayer->tfstate & ( TFSTATE_CANT_MOVE | TFSTATE_AIMING ) ) && cb_prematch_time <= gpGlobals->time )
-	{
-		// TFC-6 Phase 1: was `return ActivationSucceeded(...)`, but that helper
-		// is an unfinished stub that always returns FALSE, which blocked every
-		// item_healthkit / item_battery / ammo pickup. Fall back to the base
-		// multiplayer rule (allow it). Real goal-item activation is a later phase.
-		return CHalfLifeMultiplay::CanHaveItem( pPlayer, pItem );
-	}
+		return ActivationSucceeded( pItem, pPlayer, NULL ) != FALSE;
 
 	return FALSE;
 }
@@ -172,10 +166,8 @@ void CTeamFortress::InitHUD( CBasePlayer *pl )
 {
 	TeamFortress_SetupDefaultTeams();
 
-	// TFC-6 Phase 1: skip CHalfLifeTeamplay::InitHUD -- it derived a team from
-	// the "model" userinfo (a class name in TFC) and sent an empty gmsgTeamNames
-	// that left the client with zero selectable teams. Go straight to the
-	// multiplayer base (MOTD, scoreboard, game mode).
+	// Skip CHalfLifeTeamplay::InitHUD: it takes a team from the "model" userinfo (a
+	// class in TFC) and sends an empty gmsgTeamNames, leaving zero selectable teams.
 	CHalfLifeMultiplay::InitHUD( pl );
 
 	MESSAGE_BEGIN( MSG_ONE, gmsgGameMode, NULL, pl->edict() );
@@ -270,11 +262,8 @@ void CTeamFortress::GoToIntermission( void )
 	m_iEndIntermissionButtonHit = FALSE;
 }
 
-//=========================================================
-// TFC-6 Phase 1 -- real team model. The generic CHalfLifeTeamplay versions
-// key off the "model" userinfo string, which in TFC is the player's class,
-// not their team.
-//=========================================================
+// Real team model: CHalfLifeTeamplay keys off the "model" userinfo, which in TFC
+// is the player's class, not their team.
 const char *CTeamFortress::SetDefaultPlayerTeam( CBasePlayer *pPlayer )
 {
 	if ( pPlayer->team_no >= 1 )
@@ -343,4 +332,5 @@ void CTeamFortress::PlayerThink( CBasePlayer *pPlayer )
 	// Runs in PreThink, before UpdateClientData -> SendAmmoUpdate.
 	TeamFortress_SyncAmmo( pPlayer );
 	TeamFortress_GrenadeThink( pPlayer );
+	TeamFortress_ProjectileThink( pPlayer );
 }

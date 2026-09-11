@@ -53,7 +53,6 @@ int CTFNailgun::GetItemInfo( ItemInfo *p )
 	return 1;
 }
 
-// Velaron: TODO
 void CTFNailgun::PrimaryAttack( void )
 {
 	Vector p_vecOrigin, p_vecAngles;
@@ -71,7 +70,10 @@ void CTFNailgun::PrimaryAttack( void )
 		UTIL_MakeVectors( m_pPlayer->pev->v_angle );
 		p_vecOrigin = m_pPlayer->GetGunPosition() + gpGlobals->v_up * -4.0f + gpGlobals->v_right * 2.0f;
 		p_vecAngles = m_pPlayer->pev->v_angle;
-		//CTFNailgunNail::CreateNail( false, &p_vecOrigin, &p_vecAngles, m_pPlayer, this, true );
+#ifndef CLIENT_DLL
+		CTFNailgunNail::CreateNail( p_vecOrigin, p_vecAngles, m_pPlayer, TRUE );
+#endif
+		DB_LogShots( 1 );
 		m_pPlayer->ammo_nails--;
 
 		if ( m_pPlayer->ammo_nails < 0 )
@@ -160,14 +162,13 @@ void CTFSuperNailgun::PrimaryAttack( void )
 		UTIL_MakeVectors( m_pPlayer->pev->v_angle );
 		p_vecOrigin = m_pPlayer->GetGunPosition() + gpGlobals->v_up * -4.0f + gpGlobals->v_right * 2.0f;
 		p_vecAngles = m_pPlayer->pev->v_angle;
+#ifndef CLIENT_DLL
 		if ( m_pPlayer->ammo_nails <= 3 )
-		{
-			//CTFNailgunNail::CreateNail( false, &p_vecOrigin, &p_vecAngles, m_pPlayer, this, true );
-		}
+			CTFNailgunNail::CreateNail( p_vecOrigin, p_vecAngles, m_pPlayer, TRUE );
 		else
-		{
-			//CTFNailgunNail::CreateSuperNail( &p_vecOrigin, &p_vecAngles, m_pPlayer, this );
-		}
+			CTFNailgunNail::CreateSuperNail( p_vecOrigin, p_vecAngles, m_pPlayer );
+#endif
+		DB_LogShots( 1 );
 		m_pPlayer->ammo_nails -= 2;
 
 		if ( m_pPlayer->ammo_nails < 0 )

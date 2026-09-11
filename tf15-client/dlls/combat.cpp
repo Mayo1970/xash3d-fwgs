@@ -876,7 +876,12 @@ int CBaseMonster::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, f
 	// if this is a player, move him around!
 	if( ( !FNullEnt( pevInflictor ) ) && ( pev->movetype == MOVETYPE_WALK ) && ( !pevAttacker || pevAttacker->solid != SOLID_TRIGGER ) )
 	{
-		pev->velocity = pev->velocity + vecDir * -DamageForce( flDamage );
+		// [tfc.so] your own blast pushes at most 55 here; the jump itself comes
+		// from CBasePlayer::TakeDamage
+		int iForce = (int)DamageForce( flDamage );
+		if( ( pevInflictor == pev || pevAttacker == pev ) && iForce > 55 )
+			iForce = 55;
+		pev->velocity = pev->velocity + vecDir * (float)-iForce;
 	}
 
 	// do the damage
@@ -1009,10 +1014,8 @@ float CBaseMonster::DamageForce( float damage )
 	return force;
 }
 
-//
-// RadiusDamage - this entity is exploding, or otherwise needs to inflict damage upon entities within a certain range.
-// 
-// only damage ents that can clearly be seen by the explosion!
+// [tfc.so] RadiusDamage: no water-boundary test, and the inflictor's pev->enemy
+// (a direct-hit victim, already paid in full) is left out of the splash.
 void RadiusDamage( Vector vecSrc, entvars_t *pevInflictor, entvars_t *pevAttacker, float flDamage, float flRadius, int iClassIgnore, int bitsDamageType )
 {
 	CBaseEntity *pEntity = NULL;
@@ -1025,8 +1028,6 @@ void RadiusDamage( Vector vecSrc, entvars_t *pevInflictor, entvars_t *pevAttacke
 	else
 		falloff = 1.0f;
 
-	int bInWater = ( UTIL_PointContents( vecSrc ) == CONTENTS_WATER );
-
 	vecSrc.z += 1.0f;// in case grenade is lying on the ground
 
 	if( !pevAttacker )
@@ -1035,56 +1036,66 @@ void RadiusDamage( Vector vecSrc, entvars_t *pevInflictor, entvars_t *pevAttacke
 	// iterate on all entities in the vicinity.
 	while( ( pEntity = UTIL_FindEntityInSphere( pEntity, vecSrc, flRadius ) ) != NULL )
 	{
-		if( pEntity->pev->takedamage != DAMAGE_NO )
+		if( pEntity->pev->takedamage == DAMAGE_NO )
+			continue;
+
+		// UNDONE: this should check a damage mask, not an ignore
+		if( iClassIgnore != CLASS_NONE && pEntity->Classify() == iClassIgnore )
+			continue;
+
+		if( pevInflictor && pevInflictor->enemy && pevInflictor->enemy == pEntity->edict() )
+			continue;
+
+		vecSpot = pEntity->BodyTarget( vecSrc );
+
+		UTIL_TraceLine( vecSrc, vecSpot, dont_ignore_monsters, ENT( pevInflictor ), &tr );
+
+		// walls stop it, unless it pierces walls and the target is within 3/4 of the damage
+		if( tr.flFraction != 1.0f && tr.pHit != pEntity->edict() )
 		{
-			// UNDONE: this should check a damage mask, not an ignore
-			if( iClassIgnore != CLASS_NONE && pEntity->Classify() == iClassIgnore )
-			{
-				// houndeyes don't hurt other houndeyes with their attack
+			if( !( bitsDamageType & DMG_WALLPIERCING ) )
 				continue;
-			}
-
-			// blast's don't tavel into or out of water
-			if( bInWater && pEntity->pev->waterlevel == 0 )
+			if( ( vecSrc - vecSpot ).Length() > flDamage * 0.75f )
 				continue;
-			if( !bInWater && pEntity->pev->waterlevel == 3 )
-				continue;
+		}
 
-			vecSpot = pEntity->BodyTarget( vecSrc );
+		if( tr.fStartSolid )
+		{
+			// if we're stuck inside them, fixup the position and distance
+			tr.vecEndPos = vecSrc;
+			tr.flFraction = 0.0f;
+		}
 
-			UTIL_TraceLine( vecSrc, vecSpot, dont_ignore_monsters, ENT( pevInflictor ), &tr );
+		// the attacker only takes 75% of their own MAX or QUAKE blast
+		if( bitsDamageType & DMG_RADIUS_MAX )
+		{
+			flAdjustedDamage = flDamage;
+			if( pEntity->pev == pevAttacker )
+				flAdjustedDamage *= 0.75f;
+		}
+		else if( bitsDamageType & DMG_RADIUS_QUAKE )
+		{
+			flAdjustedDamage = flDamage - ( vecSrc - tr.vecEndPos ).Length() * 0.5f;
+			if( pEntity->pev == pevAttacker )
+				flAdjustedDamage *= 0.75f;
+		}
+		else
+		{
+			flAdjustedDamage = flDamage - ( vecSrc - tr.vecEndPos ).Length() * falloff;
+		}
 
-			if( tr.flFraction == 1.0f || tr.pHit == pEntity->edict() )
-			{
-				// the explosion can 'see' this entity, so hurt them!
-				if( tr.fStartSolid )
-				{
-					// if we're stuck inside them, fixup the position and distance
-					tr.vecEndPos = vecSrc;
-					tr.flFraction = 0.0f;
-				}
+		if( flAdjustedDamage < 0.0f )
+			flAdjustedDamage = 0.0f;
 
-				// decrease damage for an ent that's farther from the bomb.
-				flAdjustedDamage = ( vecSrc - tr.vecEndPos ).Length() * falloff;
-				flAdjustedDamage = flDamage - flAdjustedDamage;
-
-				if( flAdjustedDamage < 0.0f )
-				{
-					flAdjustedDamage = 0.0f;
-				}
-
-				// ALERT( at_console, "hit %s\n", STRING( pEntity->pev->classname ) );
-				if( tr.flFraction != 1.0f )
-				{
-					ClearMultiDamage();
-					pEntity->TraceAttack( pevInflictor, flAdjustedDamage, ( tr.vecEndPos - vecSrc ).Normalize(), &tr, bitsDamageType );
-					ApplyMultiDamage( pevInflictor, pevAttacker );
-				}
-				else
-				{
-					pEntity->TakeDamage ( pevInflictor, pevAttacker, flAdjustedDamage, bitsDamageType );
-				}
-			}
+		if( tr.flFraction != 1.0f )
+		{
+			ClearMultiDamage();
+			pEntity->TraceAttack( pevAttacker, flAdjustedDamage, ( tr.vecEndPos - vecSrc ).Normalize(), &tr, bitsDamageType );
+			ApplyMultiDamage( pevInflictor, pevAttacker );
+		}
+		else
+		{
+			pEntity->TakeDamage( pevInflictor, pevAttacker, flAdjustedDamage, bitsDamageType );
 		}
 	}
 }

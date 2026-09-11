@@ -83,8 +83,10 @@ void CTFRailgun::PrimaryAttack( void )
 		UTIL_MakeVectors( m_pPlayer->pev->v_angle );
 		p_vecOrigin = m_pPlayer->GetGunPosition() + gpGlobals->v_right * 2.0f + gpGlobals->v_up * -4.0f;
 		p_vecAngles = m_pPlayer->pev->v_angle;
-		// Velaron: TODO
-		//CTFNailgunNail::CreateRailgunNail( &p_vecOrigin, &p_vecAngles, m_pPlayer, this );
+#ifndef CLIENT_DLL
+		CTFNailgunNail::CreateRailgunNail( p_vecOrigin, p_vecAngles, m_pPlayer );
+#endif
+		DB_LogShots( 1 );
 		m_pPlayer->ammo_nails--;
 		m_flTimeWeaponIdle = 12.5f;
 		m_flNextPrimaryAttack = GetNextAttackDelay( 0.4f );

@@ -1,24 +1,5 @@
-/***
-*
-*	Copyright (c) 1996-2002, Valve LLC. All rights reserved.
-*	
-*	This product contains software technology licensed from Id 
-*	Software, Inc. ("Id Technology").  Id Technology (c) 1996 Id Software, Inc. 
-*	All Rights Reserved.
-*
-*   Use, distribution, and modification of this source code and/or resulting
-*   object code is restricted to non-commercial enhancements to products from
-*   Valve LLC.  All other use, distribution, or modification is prohibited
-*   without written permission from Valve LLC.
-*
-****/
-/*
-
-===== bmodels.cpp ========================================================
-
-  spawn, think, and use functions for entities that use brush models
-
-*/
+// Copyright (c) 1996-2002, Valve LLC. Contains Id Technology (c) 1996 Id Software, Inc.
+// Non-commercial Valve product enhancements only. func_break.cpp: breakable and pushable brush entities.
 #include "extdll.h"
 #include "util.h"
 #include "cbase.h"
@@ -26,14 +7,15 @@
 #include "func_break.h"
 #include "decals.h"
 #include "explode.h"
+#include "player.h"
+#include "tf_defs.h"
 
 extern DLL_GLOBAL Vector	g_vecAttackDir;
 
 // =================== FUNC_Breakable ==============================================
 
-// Just add more items to the bottom of this array and they will automagically be supported
-// This is done instead of just a classname in the FGD so we can control which entities can
-// be spawned, and still remain fairly flexible
+// Add items at the end of this array to support them. An index, not a classname in the FGD,
+// controls which entities can be spawned while staying flexible.
 const char *CBreakable::pSpawnObjects[] =
 {
 	NULL,			// 0
@@ -119,9 +101,7 @@ void CBreakable::KeyValue( KeyValueData* pkvd )
 		CBaseDelay::KeyValue( pkvd );
 }
 
-//
 // func_breakable - bmodel that breaks into pieces after taking damage
-//
 LINK_ENTITY_TO_CLASS( func_breakable, CBreakable )
 
 TYPEDESCRIPTION CBreakable::m_SaveData[] =
@@ -463,9 +443,7 @@ void CBreakable::BreakTouch( CBaseEntity *pOther )
 	}
 }
 
-//
 // Smash the our breakable object
-//
 
 // Break when triggered
 void CBreakable::Use( CBaseEntity *pActivator, CBaseEntity *pCaller, USE_TYPE useType, float value )
@@ -514,11 +492,8 @@ void CBreakable::TraceAttack( entvars_t *pevAttacker, float flDamage, Vector vec
 	CBaseDelay::TraceAttack( pevAttacker, flDamage, vecDir, ptr, bitsDamageType );
 }
 
-//=========================================================
-// Special takedamage for func_breakable. Allows us to make
-// exceptions that are breakable-specific
-// bitsDamageType indicates the type of damage sustained ie: DMG_CRUSH
-//=========================================================
+// func_breakable-specific TakeDamage exceptions; bitsDamageType is the damage sustained
+// (e.g. DMG_CRUSH).
 int CBreakable::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, float flDamage, int bitsDamageType )
 {
 	Vector vecTemp;
@@ -541,6 +516,10 @@ int CBreakable::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, flo
 	}
 	
 	if( !IsBreakable() )
+		return 0;
+
+	CBaseEntity *pAttacker = CBaseEntity::Instance( pevAttacker );
+	if( pAttacker && pAttacker->Classify() == CLASS_PLAYER && !ActivationSucceeded( this, (CBasePlayer *)pAttacker, NULL ) )
 		return 0;
 
 	// Breakables take double damage from the crowbar
@@ -710,11 +689,6 @@ void CBreakable::Die( void )
 		WRITE_BYTE( cFlag );
 	MESSAGE_END();
 
-	/*float size = pev->size.x;
-	if( size < pev->size.y )
-		size = pev->size.y;
-	if( size < pev->size.z )
-		size = pev->size.z;*/
 
 	// !!! HACK  This should work!
 	// Build a box above the entity that looks like an 8 pixel high sheet

@@ -1280,6 +1280,9 @@ void TeamFortress_SendGrenadeCounts( CBasePlayer *pPlayer );
 void TeamFortress_GrenadeThink( CBasePlayer *pPlayer );
 BOOL TeamFortress_GrenadeCommand( CBasePlayer *pPlayer, const char *pcmd );
 
+// TFC-6 Phase 3 -- projectile weapons (tf_wpn_nails.cpp, tf_client.cpp)
+void TeamFortress_ProjectileThink( CBasePlayer *pPlayer );
+
 // mapscript funcs
 void ParseTFServerSettings();
 void ParseTFMapSettings();

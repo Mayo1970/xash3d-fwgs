@@ -446,13 +446,17 @@ BOOL CTFMedikit::AxeHit( CBaseEntity *pTarget, Vector p_vecDir, TraceResult *ptr
 		                     STRING( m_pPlayer->pev->netname ),
 		                     STRING( pTarget->pev->netname ) );
 
-		if ( Timer->team_no != m_pPlayer->team_no )
-			m_pPlayer->TF_AddFrags( 1 );
-
 		pTarget->tfstate &= ~TFSTATE_HALLUCINATING;
 
-		Timer->pev->nextthink = gpGlobals->time;
-		Timer->SetThink( &CBaseEntity::SUB_Remove );
+		// the gas grenade sets the state without a timer entity
+		if ( Timer )
+		{
+			if ( Timer->team_no != m_pPlayer->team_no )
+				m_pPlayer->TF_AddFrags( 1 );
+
+			Timer->pev->nextthink = gpGlobals->time;
+			Timer->SetThink( &CBaseEntity::SUB_Remove );
+		}
 	}
 
 	if ( ( pTarget->tfstate & TFSTATE_TRANQUILISED ) )
@@ -464,14 +468,17 @@ BOOL CTFMedikit::AxeHit( CBaseEntity *pTarget, Vector p_vecDir, TraceResult *ptr
 		                     STRING( m_pPlayer->pev->netname ),
 		                     STRING( pTarget->pev->netname ) );
 
-		if ( Timer->team_no != m_pPlayer->team_no )
-			m_pPlayer->TF_AddFrags( 1 );
-
 		pTarget->tfstate &= ~TFSTATE_TRANQUILISED;
 		( (CBasePlayer *)pTarget )->TeamFortress_SetSpeed();
 
-		Timer->pev->nextthink = gpGlobals->time;
-		Timer->SetThink( &CBaseEntity::SUB_Remove );
+		if ( Timer )
+		{
+			if ( Timer->team_no != m_pPlayer->team_no )
+				m_pPlayer->TF_AddFrags( 1 );
+
+			Timer->pev->nextthink = gpGlobals->time;
+			Timer->SetThink( &CBaseEntity::SUB_Remove );
+		}
 	}
 
 	if ( ( pTarget->tfstate & TFSTATE_INFECTED ) )

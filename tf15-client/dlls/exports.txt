@@ -78,6 +78,8 @@ info_player_start
 info_player_teamspawn
 info_target
 info_teleport_destination
+info_tf_teamcheck
+i_p_t
 infodecal
 item_airtank
 item_antidote
@@ -126,9 +128,17 @@ speaker
 target_cdaudio
 test_effect
 testhull
+tf_flame
+tf_flamethrower_burst
+tf_gl_grenade
+tf_ic_rocket
+tf_nailgun_nail
+tf_rpg_rocket
+timer
 tf_weapon_ac
 tf_weapon_autorifle
 tf_weapon_axe
+tf_grenade_nail
 tf_weapon_caltrop
 tf_weapon_caltropgrenade
 tf_weapon_concussiongrenade
@@ -139,6 +149,7 @@ tf_weapon_gl
 tf_weapon_ic
 tf_weapon_knife
 tf_weapon_medikit
+tf_weapon_mirvbomblet
 tf_weapon_mirvgrenade
 tf_weapon_nailgrenade
 tf_weapon_napalmgrenade

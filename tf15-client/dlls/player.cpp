@@ -397,14 +397,49 @@ int CBasePlayer::TakeHealth( float flHealth, int bitsDamageType )
 	return CBaseMonster::TakeHealth( flHealth, bitsDamageType );
 }
 
+// [tfc.so] class model + team colours go out as userinfo; the engine remaps both
+// the third-person model and the first-person hands with them. A spy shows his disguise.
 void CBasePlayer::TeamFortress_SetSkin( void )
 {
+	char *infobuffer = g_engfuncs.pfnGetInfoKeyBuffer( edict() );
+	int iClass = pev->playerclass;
+	int iTeam = team_no;
+
 	immune_to_check = gpGlobals->time + 10.0f;
 
-	if ( pev->playerclass == PC_SPY )
+	if ( iClass == PC_SPY )
 	{
-		
+		if ( undercover_skin )
+			iClass = undercover_skin;
+		if ( undercover_team )
+			iTeam = undercover_team;
 	}
+
+	if ( iClass < PC_UNDEFINED || iClass >= PC_LASTCLASS )
+		iClass = PC_UNDEFINED;
+
+	// every class shares the scout hull; the drawn model comes from "model"
+	SET_MODEL( edict(), "models/player/scout/scout.mdl" );
+	if ( !sOldClassModelFiles[iClass] )
+		pev->effects |= EF_NODRAW;
+
+	const char *szModel = replacement_model ? STRING( replacement_model ) : sClassModels[iClass];
+	g_engfuncs.pfnSetClientKeyValue( entindex(), infobuffer, "model", (char *)szModel );
+
+	if ( team_no >= 1 && team_no <= 4 && iTeam >= 1 && iTeam <= 4 )
+	{
+		g_engfuncs.pfnSetClientKeyValue( entindex(), infobuffer, "topcolor",
+		                                 UTIL_VarArgs( "%d", teamcolors[iTeam][iClass].topColor ) );
+		g_engfuncs.pfnSetClientKeyValue( entindex(), infobuffer, "bottomcolor",
+		                                 UTIL_VarArgs( "%d", teamcolors[iTeam][iClass].bottomColor ) );
+	}
+
+	if ( pev->flags & FL_DUCKING )
+		UTIL_SetSize( pev, VEC_DUCK_HULL_MIN, VEC_DUCK_HULL_MAX );
+	else
+		UTIL_SetSize( pev, VEC_HULL_MIN, VEC_HULL_MAX );
+
+	g_ulModelIndexPlayer = pev->modelindex;
 }
 
 void CBasePlayer::TeamFortress_ExecMapScript( void )
@@ -445,12 +480,11 @@ void CBasePlayer::TeamFortress_SetSpeed( void )
 		default:          speed = PC_SCOUT_MAXSPEED;    break;
 		}
 
-		// AC spin-up and sniper zoom both set TFSTATE_AIMING
-		if ( ( tfstate & TFSTATE_AIMING ) && speed > 80.0f )
-			speed = 80.0f;
+		// [tfc.so] order: tranquilised halves, then leg damage, then the aiming cap
+		if ( tfstate & TFSTATE_TRANQUILISED )
+			speed *= 0.5f;
 
-		// TFC-6 Phase 2: caltrops + sniper legshots stack leg_damage; each
-		// point costs 10% speed. Lives here so nothing can wipe the clamp.
+		// caltrops + sniper legshots stack leg_damage; each point costs 10% speed
 		if ( leg_damage > 0.0f )
 		{
 			float mul = 1.0f - ( leg_damage * 0.1f );
@@ -458,6 +492,10 @@ void CBasePlayer::TeamFortress_SetSpeed( void )
 				mul = 0.4f;
 			speed *= mul;
 		}
+
+		// AC spin-up and sniper zoom both set TFSTATE_AIMING
+		if ( ( tfstate & TFSTATE_AIMING ) && speed > 80.0f )
+			speed = 80.0f;
 	}
 
 	pev->maxspeed = speed;
@@ -515,16 +553,8 @@ void CBasePlayer::TraceAttack( entvars_t *pevAttacker, float flDamage, Vector ve
 	}
 }
 
-/*
-	Take some damage.  
-	NOTE: each call to TakeDamage with bitsDamageType set to a time-based damage
-	type will cause the damage time countdown to be reset.  Thus the ongoing effects of poison, radiation
-	etc are implemented with subsequent calls to TakeDamage using DMG_GENERIC.
-*/
-
-#define ARMOR_RATIO	0.2	// Armor Takes 80% of the damage
-#define ARMOR_BONUS	0.5	// Each Point of Armor is work 1/x points of health
-
+// Take some damage. A time-based damage type resets its countdown each call, so
+// poison/radiation keep ticking through later DMG_GENERIC calls.
 int CBasePlayer::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, float flDamage, int bitsDamageType )
 {
 	// have suit diagnose the problem - ie: report damage type
@@ -534,18 +564,7 @@ int CBasePlayer::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, fl
 	int fcritical;
 	int fTookDamage;
 	int ftrivial;
-	float flRatio;
-	float flBonus;
 	float flHealthPrev = pev->health;
-
-	flBonus = ARMOR_BONUS;
-	flRatio = ARMOR_RATIO;
-
-	if( ( bitsDamageType & DMG_BLAST ) && g_pGameRules->IsMultiplayer() )
-	{
-		// blasts damage armor more.
-		flBonus *= 2;
-	}
 
 	// Already dead
 	if( !IsAlive() )
@@ -560,35 +579,83 @@ int CBasePlayer::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, fl
 		return 0;
 	}
 
-	// keep track of amount of damage last sustained
-	m_lastDamageAmount = (int)flDamage;
-
-	// Armor. 
-	if( !( pev->flags & FL_GODMODE ) && pev->armorvalue && !( bitsDamageType & ( DMG_FALL | DMG_DROWN ) ) )// armor doesn't protect against fall or drown damage!
+	// [tfc.so] a player attacker needs a team, and every player hit is scaled 0.9
+	// (x4 under quad damage)
+	BOOL bPlayerAttacker = FALSE;
+	if( pAttacker && pAttacker->Classify() == CLASS_PLAYER )
 	{
-		float flNew = flDamage * flRatio;
-
-		float flArmor;
-
-		flArmor = ( flDamage - flNew ) * flBonus;
-
-		// Does this use more armor than we have?
-		if( flArmor > pev->armorvalue )
-		{
-			flArmor = pev->armorvalue;
-			flArmor *= ( 1 / flBonus );
-			flNew = flDamage - flArmor;
-			pev->armorvalue = 0;
-		}
-		else
-			pev->armorvalue -= flArmor;
-
-		flDamage = flNew;
+		if( pAttacker->team_no == 0 )
+			return 0;
+		flDamage *= 0.9f;
+		if( pAttacker->super_damage_finished > gpGlobals->time )
+			flDamage *= 4.0f;
+		bPlayerAttacker = TRUE;
 	}
 
-	// this cast to INT is critical!!! If a player ends up with 0.5 health, the engine will get that
-	// as an int (zero) and think the player is dead! (this will incite a clientside screentilt, etc)
-	fTookDamage = CBaseMonster::TakeDamage( pevInflictor, pevAttacker, (int)flDamage, bitsDamageType );
+	// keep track of amount of damage last sustained
+	m_lastDamageAmount = (int)flDamage;
+	float flRawDamage = flDamage;
+
+	// armorclass: each resistance halves its damage type
+	if( armorclass )
+	{
+		if( ( armorclass & AT_SAVESHOT ) && ( bitsDamageType & DMG_BULLET ) )
+			flDamage *= 0.5f;
+		if( ( armorclass & AT_SAVENAIL ) && ( bitsDamageType & DMG_NAIL ) )
+			flDamage *= 0.5f;
+		if( ( armorclass & AT_SAVEEXPLOSION ) && ( bitsDamageType & DMG_BLAST ) )
+			flDamage *= 0.5f;
+		if( ( armorclass & AT_SAVEELECTRICITY ) && ( bitsDamageType & DMG_SHOCK ) )
+			flDamage *= 0.5f;
+		if( ( armorclass & AT_SAVEFIRE ) && ( bitsDamageType & DMG_BURN ) )
+			flDamage *= 0.5f;
+	}
+
+	// [tfc.so] armor soaks floor( dmg * armortype ). Once that would empty it, TFC
+	// takes armortype * the armor left instead, and the armor type is lost.
+	if( !( pev->flags & FL_GODMODE ) && pev->armorvalue > 0.0f && !( bitsDamageType & ( DMG_FALL | DMG_DROWN | DMG_IGNOREARMOR ) ) )
+	{
+		float flSave = floorf( flDamage * pev->armortype );
+
+		if( flSave >= pev->armorvalue )
+		{
+			flSave = pev->armortype * pev->armorvalue;
+			pev->armortype = 0.0f;
+			pev->armorvalue = 0.0f;
+			items &= ~( IT_ARMOR1 | IT_ARMOR2 | IT_ARMOR3 );
+			armorclass = 0;
+		}
+		else
+		{
+			pev->armorvalue -= flSave;
+		}
+
+		flDamage -= flSave;
+	}
+
+	// [tfc.so] projectile knockback -- rocket, pipe and grenade jumps. Only when the
+	// inflictor is not the attacker (never hitscan), and never for nails.
+	if( pevInflictor && pevAttacker != pevInflictor && pev->movetype == MOVETYPE_WALK
+	    && !( tfstate & TFSTATE_CANT_MOVE ) && !( bitsDamageType & DMG_NAIL ) )
+	{
+		immune_to_check = gpGlobals->time + flRawDamage / 20.0f;
+
+		Vector vecDir = pev->origin - ( pevInflictor->absmin + pevInflictor->absmax ) * 0.5f;
+		vecDir = ( vecDir.Length() > 0.0f ) ? vecDir.Normalize() : Vector( 0, 0, 1 );
+
+		int iKnock = m_lastDamageAmount;
+		if( pev->playerclass == PC_HVYWEAP && flRawDamage > 50.0f )
+			iKnock /= 4;
+
+		float flScale = ( bPlayerAttacker && iKnock <= 59 && pAttacker != this ) ? 11.0f : 8.0f;
+		pev->velocity = pev->velocity + vecDir * ( iKnock * flScale );
+	}
+
+	if( ( bitsDamageType & DMG_NOT_SELF ) && pAttacker == this )
+		return 0;
+
+	// Whole points only: 0.5 health would reach the engine as 0 and read as dead.
+	fTookDamage = CBaseMonster::TakeDamage( pevInflictor, pevAttacker, ceilf( flDamage ), bitsDamageType );
 
 	// reset damage time countdown for each type of time based damage player just sustained
 	{
@@ -596,6 +663,10 @@ int CBasePlayer::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, fl
 			if( bitsDamageType & ( DMG_PARALYZE << i ) )
 				m_rgbTimeBasedDamage[i] = 0;
 	}
+
+	// [tfc.so] flamethrower/IC hits set you alight, unless you are under water
+	if( fTookDamage && ( bitsDamageType & DMG_IGNITE ) && pev->waterlevel <= 1 )
+		Ignite( pevInflictor, pevAttacker );
 
 	// tell director about it
 	MESSAGE_BEGIN( MSG_SPEC, SVC_DIRECTOR );
@@ -951,6 +1022,9 @@ void CBasePlayer::Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int i
 		m_pActiveItem->Holster();
 
 	g_pGameRules->PlayerKilled( this, pevAttacker, g_pevLastInflictor );
+
+	// [tfc.so] Killed -> RemoveTimers: pipes go off, tranq and other timers end
+	TeamFortress_RemoveTimers();
 
 	if( m_pTank != 0 )
 		m_pTank->Use( this, this, USE_OFF, 0 );

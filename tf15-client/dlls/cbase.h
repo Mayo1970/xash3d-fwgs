@@ -964,8 +964,9 @@ public:
 // these are the damage types that are allowed to gib corpses
 #define DMG_GIB_CORPSE ( DMG_CRUSH | DMG_FALL | DMG_BLAST | DMG_SONIC | DMG_CLUB )
 
-// these are the damage types that have client hud art
-#define DMG_SHOWNHUD ( DMG_POISON | DMG_ACID | DMG_FREEZE | DMG_SLOWFREEZE | DMG_DROWN | DMG_BURN | DMG_SLOWBURN | DMG_NERVEGAS | DMG_RADIATION | DMG_SHOCK )
+// these are the damage types that have client hud art. DMG_CALTROP has a tile
+// (giDmgFlags[8] -> hud.txt dmg_caltrop, 9 after dmg_bio) the server never sent.
+#define DMG_SHOWNHUD ( DMG_POISON | DMG_ACID | DMG_FREEZE | DMG_SLOWFREEZE | DMG_DROWN | DMG_BURN | DMG_SLOWBURN | DMG_NERVEGAS | DMG_RADIATION | DMG_SHOCK | DMG_CALTROP )
 
 // NOTE: tweak these values based on gameplay feedback:
 

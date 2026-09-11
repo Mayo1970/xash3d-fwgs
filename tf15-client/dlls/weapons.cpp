@@ -334,6 +334,11 @@ void W_Precache( void )
 	UTIL_PrecacheOther( "tf_weapon_caltropgrenade" );
 	UTIL_PrecacheOther( "tf_weapon_caltrop" );
 
+	// Phase 3 projectiles no weapon Precache reaches
+	UTIL_PrecacheOther( "tf_nailgun_nail" );
+	UTIL_PrecacheOther( "tf_gl_grenade" );
+	UTIL_PrecacheOther( "tf_flame" );
+
 	UTIL_PrecacheOther( "weaponbox" );
 
 	g_sModelIndexFireball = PRECACHE_MODEL( "sprites/explode01.spr" );

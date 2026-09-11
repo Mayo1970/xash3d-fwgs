@@ -480,7 +480,7 @@ public:
 	void RemovePipebombs( void );
 	void Engineer_RemoveBuildings( void );
 	void TeamFortress_RemoveBuildings( void );
-	void Ignite( int tno );
+	void Ignite( entvars_t *pevInflictor, entvars_t *pevAttacker );
 	void TF_AddFrags( int iFrags );
 
 	void ResetMenu( void );

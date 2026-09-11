@@ -1,28 +1,10 @@
-/***
-*
-*	Copyright (c) 1996-2002, Valve LLC. All rights reserved.
-*	
-*	This product contains software technology licensed from Id 
-*	Software, Inc. ("Id Technology").  Id Technology (c) 1996 Id Software, Inc. 
-*	All Rights Reserved.
-*
-*   Use, distribution, and modification of this source code and/or resulting
-*   object code is restricted to non-commercial enhancements to products from
-*   Valve LLC.  All other use, distribution, or modification is prohibited
-*   without written permission from Valve LLC.
-*
-****/
-/*
-
-===== subs.cpp ========================================================
-
-  frequently used global functions
-
-*/
+// Copyright (c) 1996-2002, Valve LLC. Contains Id Technology (c) 1996 Id Software, Inc.
+// Non-commercial Valve product enhancements only. subs.cpp: frequently used global functions.
 
 #include "extdll.h"
 #include "util.h"
 #include "cbase.h"
+#include "player.h"
 #include "saverestore.h"
 #include "nodes.h"
 #include "doors.h"
@@ -69,10 +51,6 @@ private:
 LINK_ENTITY_TO_CLASS( info_player_deathmatch, CBaseDMStart )
 LINK_ENTITY_TO_CLASS( info_player_start, CPointEntity )
 LINK_ENTITY_TO_CLASS( info_landmark, CPointEntity )
-// TFC-6 Phase 1: TFC's per-team spawn point. A plain point entity is enough --
-// CBaseEntity::KeyValue already parses its "team_no" key; CTeamFortress::
-// GetPlayerSpawnSpot picks among these by team.
-LINK_ENTITY_TO_CLASS( info_player_teamspawn, CPointEntity )
 
 void CBaseDMStart::KeyValue( KeyValueData *pkvd )
 {
@@ -161,26 +139,11 @@ void CBaseDelay::KeyValue( KeyValueData *pkvd )
 	}
 }
 
-/*
-==============================
-SUB_UseTargets
-
-If self.delay is set, a DelayedUse entity will be created that will actually
-do the SUB_UseTargets after that many seconds have passed.
-
-Removes all entities with a targetname that match self.killtarget,
-and removes them, so some events can remove other triggers.
-
-Search for (string)targetname in all entities that
-match (string)self.target and call their .use function (if they have one)
-
-==============================
-*/
+// SUB_UseTargets: with a delay, a DelayedUse entity fires later. Removes entities whose targetname
+// matches killtarget, then calls Use on every entity whose targetname matches target.
 void CBaseEntity::SUB_UseTargets( CBaseEntity *pActivator, USE_TYPE useType, float value )
 {
-	//
 	// fire targets
-	//
 	if( !FStringNull( pev->target ) )
 	{
 		FireTargets( STRING( pev->target ), pActivator, this, useType, value );
@@ -214,15 +177,11 @@ LINK_ENTITY_TO_CLASS( DelayedUse, CBaseDelay )
 
 void CBaseDelay::SUB_UseTargets( CBaseEntity *pActivator, USE_TYPE useType, float value )
 {
-	//
 	// exit immediatly if we don't have a target or kill target
-	//
 	if( FStringNull( pev->target ) && !m_iszKillTarget )
 		return;
 
-	//
 	// check for a delay
-	//
 	if( m_flDelay != 0 )
 	{
 		// create a temp object to fire at a later time
@@ -239,10 +198,8 @@ void CBaseDelay::SUB_UseTargets( CBaseEntity *pActivator, USE_TYPE useType, floa
 		pTemp->m_flDelay = 0.0f; // prevent "recursion"
 		pTemp->pev->target = pev->target;
 
-		// HACKHACK
-		// This wasn't in the release build of Half-Life.  We should have moved m_hActivator into this class
-		// but changing member variable hierarchy would break save/restore without some ugly code.
-		// This code is not as ugly as that code
+		// HACKHACK, not in retail HL: m_hActivator belongs in this class, but moving it would
+		// break save/restore. Keep a player activator in pev->owner instead.
 		if( pActivator && pActivator->IsPlayer() )		// If a player activates, then save it
 		{
 			pTemp->pev->owner = pActivator->edict();
@@ -255,9 +212,7 @@ void CBaseDelay::SUB_UseTargets( CBaseEntity *pActivator, USE_TYPE useType, floa
 		return;
 	}
 
-	//
 	// kill the killtargets
-	//
 	if( m_iszKillTarget )
 	{
 		edict_t *pentKillTarget = NULL;
@@ -273,26 +228,15 @@ void CBaseDelay::SUB_UseTargets( CBaseEntity *pActivator, USE_TYPE useType, floa
 		}
 	}
 
-	//
 	// fire targets
-	//
 	if( !FStringNull( pev->target ) )
 	{
 		FireTargets( STRING( pev->target ), pActivator, this, useType, value );
 	}
 }
 
-/*
-void CBaseDelay::SUB_UseTargetsEntMethod( void )
-{
-	SUB_UseTargets( pev );
-}
-*/
 
-/*
-QuakeEd only writes a single float for angles (bad idea), so up and down are
-just constant angles.
-*/
+// QuakeEd writes a single float for angles, so up and down are constant angles.
 void SetMovedir( entvars_t *pev )
 {
 	if( pev->angles == Vector( 0, -1, 0 ) )
@@ -378,14 +322,7 @@ void CBaseToggle::KeyValue( KeyValueData *pkvd )
 		CBaseDelay::KeyValue( pkvd );
 }
 
-/*
-=============
-LinearMove
-
-calculate pev->velocity and pev->nextthink to reach vecDest from
-pev->origin traveling at flSpeed
-===============
-*/
+// LinearMove: set pev->velocity and pev->nextthink to reach vecDest from pev->origin at flSpeed.
 void CBaseToggle::LinearMove( Vector vecDest, float flSpeed )
 {
 	ASSERTSZ( flSpeed != 0, "LinearMove:  no speed is defined!" );
@@ -421,11 +358,7 @@ void CBaseToggle::LinearMove( Vector vecDest, float flSpeed )
 	pev->velocity = vecDestDelta / flTravelTime;
 }
 
-/*
-============
-After moving, set origin to exact final destination, call "move done" function
-============
-*/
+// After moving, set origin to the exact final destination and call the "move done" function.
 void CBaseToggle::LinearMoveDone( void )
 {
 	Vector delta = m_vecFinalDest - pev->origin;
@@ -451,15 +384,8 @@ BOOL CBaseToggle::IsLockedByMaster( void )
 		return FALSE;
 }
 
-/*
-=============
-AngularMove
-
-calculate pev->velocity and pev->nextthink to reach vecDest from
-pev->origin traveling at flSpeed
-Just like LinearMove, but rotational.
-===============
-*/
+// AngularMove: like LinearMove, but rotational; sets pev->avelocity and pev->nextthink
+// to reach vecDestAngle at flSpeed.
 void CBaseToggle::AngularMove( Vector vecDestAngle, float flSpeed )
 {
 	ASSERTSZ( flSpeed != 0, "AngularMove:  no speed is defined!" );
@@ -488,11 +414,7 @@ void CBaseToggle::AngularMove( Vector vecDestAngle, float flSpeed )
 	pev->avelocity = vecDestDelta / flTravelTime;
 }
 
-/*
-============
-After rotating, set angle to exact final angle, call "move done" function
-============
-*/
+// After rotating, set angles to the exact final angle and call the "move done" function.
 void CBaseToggle::AngularMoveDone( void )
 {
 	pev->angles = m_vecFinalAngle;
@@ -533,13 +455,7 @@ float CBaseToggle::AxisDelta( int flags, const Vector &angle1, const Vector &ang
 	return angle1.y - angle2.y;
 }
 
-/*
-=============
-FEntIsVisible
-
-returns TRUE if the passed entity is visible to caller, even if not infront ()
-=============
-*/
+// FEntIsVisible: TRUE if the passed entity is visible to the caller, even if not in front.
 BOOL FEntIsVisible( entvars_t *pev, entvars_t *pevTarget)
 {
 	Vector vecSpot1 = pev->origin + pev->view_ofs;
@@ -1250,12 +1166,12 @@ void CBaseEntity::KeyValuePartTwo( KeyValueData *pkvd )
 	}
 	else if( FStrEq( pkvd->szKeyName, "teamcheck" ) )
 	{
-		teamcheck = atoi( pkvd->szValue );
+		teamcheck = ALLOC_STRING( pkvd->szValue );
 		pkvd->fHandled = TRUE;
 	}
 	else if( FStrEq( pkvd->szKeyName, "owned_by_teamcheck" ) )
 	{
-		owned_by_teamcheck = atoi( pkvd->szValue );
+		owned_by_teamcheck = ALLOC_STRING( pkvd->szValue );
 		pkvd->fHandled = TRUE;
 	}
 	else if( FStrEq( pkvd->szKeyName, "team1_name" )
@@ -1403,14 +1319,25 @@ BOOL CBaseEntity::IsTeammate( CBaseEntity *pOther )
 	return TRUE;
 }
 
+// [tfc.so] same team, or a team this one lists in its teamallies bitfield.
+// No team (0) is nobody's ally.
 BOOL CBaseEntity::IsAlly( int iTeamNo )
 {
-	return TRUE;
+	if ( iTeamNo < 1 || iTeamNo > 4 || team_no < 1 || team_no > 4 )
+		return FALSE;
+
+	if ( ( teamallies[team_no] >> ( iTeamNo - 1 ) ) & 1 )
+		return TRUE;
+
+	return team_no == iTeamNo;
 }
 
 BOOL CBaseEntity::IsAlly( CBaseEntity *pOther )
 {
-	return TRUE;
+	if ( !pOther )
+		return FALSE;
+
+	return IsAlly( pOther->team_no );
 }
 
 CBaseEntity *CBaseEntity::FindTeamSpawnPoint()
@@ -1454,8 +1381,20 @@ void CBaseEntity::Timer_Regeneration()
 {
 }
 
+// Runs on the timer entity; its owner is the tranquilised player.
 void CBaseEntity::Timer_Tranquilisation()
 {
+	CBaseEntity *pOwner = pev->owner ? CBaseEntity::Instance( pev->owner ) : NULL;
+
+	if ( pOwner && pOwner->IsPlayer() )
+	{
+		ClientPrint( pOwner->pev, HUD_PRINTNOTIFY, "#Tranq_finished" );
+		pOwner->tfstate &= ~TFSTATE_TRANQUILISED;
+		( (CBasePlayer *)pOwner )->TeamFortress_SetSpeed();
+	}
+
+	SetThink( &CBaseEntity::SUB_Remove );
+	pev->nextthink = gpGlobals->time;
 }
 
 void CBaseEntity::Timer_Hallucination()
@@ -1466,14 +1405,35 @@ void CBaseEntity::Timer_HealthRot()
 {
 }
 
+// [tfc.so] a "timer" is a bare entity owned by the entity it ticks for;
+// timer_type says which effect it is.
+class CTimer : public CBaseEntity
+{
+};
+
+LINK_ENTITY_TO_CLASS( timer, CTimer )
+
 CBaseEntity *CBaseEntity::CreateTimer( int iTimerType )
 {
-	return 0;
+	CBaseEntity *pTimer = CBaseEntity::Create( "timer", g_vecZero, g_vecZero, edict() );
+	if ( pTimer )
+		pTimer->timer_type = iTimerType;
+	return pTimer;
 }
 
+// TF_TIMER_ANY matches any of this entity's timers.
 CBaseEntity *CBaseEntity::FindTimer( int iTimerType )
 {
-	return 0;
+	CBaseEntity *pTimer = NULL;
+
+	while ( ( pTimer = UTIL_FindEntityByClassname( pTimer, "timer" ) ) != NULL )
+	{
+		if ( pTimer->pev->owner != edict() )
+			continue;
+		if ( iTimerType == TF_TIMER_ANY || pTimer->timer_type == iTimerType )
+			return pTimer;
+	}
+	return NULL;
 }
 
 void CBaseEntity::Timer_Infection()

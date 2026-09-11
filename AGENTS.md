@@ -3557,12 +3557,306 @@ Goal ladder:
         SESSION HANDOFF: see [[project_xashps3_tfc6_hosting_broken]] top of the
         Phase 2 section. Next session: get the specific issue list first.**
         Latest build `build_tfc/engine/EBOOT.pkg` 17:53.
-      - **Round B** (still open): nail `nailpos` directional rotation + client
-        nail event, per-tick napalm `tf_burn.sc` fire field, `no_active_*_grens`
-        caps, `DMSG_GREN_*` death messages, `tf_weapon_genericprimedgrenade`
-        in-hand model, gas hallucination, verify `v_idlescale` peak vs real TFC.
+      - **Round B WRITTEN 2026-09-10, awaiting build + HW.** The user's issue
+        list this round was: wrong models, wrong per-type behaviour ("some
+        detonate too early, or in a weird way"), and "scout's first grenade is
+        not a grenade -- you tap and they land on the ground". Fixes, all in
+        `tf_grenade.cpp` (+1 line in `exports.txt`):
+        1. **Wrong model was the biggest one and it was one line. HW-VALIDATED
+           2026-09-10 -- user confirmed every grenade model is correct.** Every
+           type used `models/grenade.mdl`, which **TFC does not ship** -- it resolved
+           out of `valve/` to the Half-Life hand grenade. The real per-type names
+           are in `client.cpp:1072-1081`'s `ENGINE_FORCE_UNMODIFIED` block:
+           `w_grenade` / `conc_grenade` / `ngrenade` / `mirv_grenade` /
+           `bomblet` / `napalm` / `spy_grenade` / `emp_grenade` / `caltrop`.
+           **Reusable: that force-unmodified list is the authoritative TFC asset
+           filename table -- read it before inventing a model or sprite name.**
+           Now a virtual `GrenModel()`/`FXEvent()` pair per subclass; the base
+           `Precache()` precaches all 9 so no type is ever a late precache.
+           Also dropped the stock-HL `pev->sequence = RANDOM_LONG(3,6)`, which
+           is a `grenade.mdl` animation range the TFC models do not have.
+        2. **Fuse back to `GR_PRIMETIME + 1` (4s).** Round A had lowered it to
+           3s and that is what "detonates too early" tracked.
+        3. **Caltrops no longer prime.** `TeamFortress_PrimeGrenade` deploys the
+           can immediately on `+gren1` and returns, so a normal press-and-hold
+           can no longer blow it in hand (with a 0.5s prime it always did). The
+           can is tossed flat *backwards* from the hull bottom and deliberately
+           does NOT inherit the player velocity, so a fleeing scout drops it
+           where they were.
+        4. **Nail grenade sprays a real rotating nail ring** instead of an
+           omnidirectional `RadiusDamage` pulse: `PLAYBACK_EVENT_FULL` of
+           `tf_nailgren.sc` (the client already implements it) plus matching
+           server traces. The wire packing is fixed by `EV_TFC_NailgrenadeNail`
+           (`ev_tfc.cpp:1477`): `iparam1` = yaw*4 in the low 11 bits, the
+           ignore-entity index in the next 5, `fparam1` = the per-nail yaw step.
+           The client advances the yaw *before* drawing each nail, so the server
+           loop must too or the visible nails and the damage diverge. Rise is
+           now traced so a low ceiling cannot swallow it, and the model is turned
+           from the think (`MOVETYPE_NONE` never integrates `avelocity`).
+        5. **Napalm leaves a lingering fire field** (`tf_burn.sc` every
+           `TF_NAPALM_TICK` for `TF_NAPALM_FIELD`) instead of only burning
+           whoever was in the blast.
+        6. **EMP plays `tf_engrgren.sc` as well as `tf_emp.sc`** -- its own event
+           is only the shockwave ring + `emp_1.wav`, no explosion at all.
+        7. **MIRV bomblets are `tf_weapon_mirvbomblet`**, with `bomblet.mdl` and
+           the `tf_mirv.sc` event; they used to respawn as normal grenades.
+        **Big-endian: audited, no bug found in this path, and the packed
+        `iparam1` is safe by construction.** Stock `delta.lst` describes
+        `iparam1` as `DT_SIGNED|DT_INTEGER, 16`, so a value >= 0x8000 arrives
+        sign-extended -- but both client extractions (`& 0x7FF`,
+        `(>> 11) & 0x1F`) mask, so two's complement round-trips exactly. The
+        other three wire paths are byte-only and length-matched
+        (`gmsgGrenades`/`SecAmmoVal` 2 bytes, `gmsgConcuss` 1,
+        `gmsgStatusIcon` variable), and the event-arg delta already reads
+        integer fields at the C member width (the section-13 fix).
+        New failure mode to watch for: the 9 model precaches set
+        `RES_FATALIFMISSING`, so a `tfc/models/` install missing any one of them
+        now fails loudly by name instead of silently drawing the wrong grenade.
+      - **Round C WRITTEN 2026-09-10, awaiting build + HW.** User verdict on
+        Round B: "some got much better", nail grenade still wrong. Two real
+        defects in Round B's nail spray, both from it being **hitscan**:
+        1. **Damage arrived up to a second before the nail you can see.** The
+           client's nails are `R_Projectile` temp entities at **1000 u/s**
+           (`cl_tent.c:1483`, `EV_TFC_NailgrenadeNail`), so instant trace damage
+           at 1000 units landed ~1s early -- and hit people across a sightline
+           the visible nails had not reached.
+        2. **A thin ray is far too sparse to be a nail.** With 5 rays 72deg
+           apart the ring only swept a target's angular width ~12% of pulses at
+           200 units, so a real nail grenade did ~36 damage there. Inconsistent
+           by construction, which is what "weird" tracked.
+        Fix: **real server-side nail projectiles.** New `CTFGrenNail`
+        (`tf_grenade_nail`, +1 exports.txt line): `MOVETYPE_FLY` + `SOLID_BBOX`,
+        `TF_NAIL_SPEED` 1000 to match the client, `TF_NAIL_LIFE` 1.5s, spawned
+        at the same `TF_NAIL_SPAWN` 12u offset and the same yaw the client uses,
+        so the nail you see IS the nail that hits.
+        **Reusable trick: the nails cost zero bandwidth.** `SET_MODEL` (so the
+        engine links and clips them like any missile) + `EF_NODRAW`, which
+        `AddToFullPack` drops at `client.cpp:1309` -- otherwise the client would
+        draw both the server nail and its own temp entity.
+        **Trap avoided: `CTFGrenNail::Fire` takes `dir` BY VALUE.** In this tree
+        `vec3_t` IS `Vector`, so a `const Vector &` parameter bound to
+        `gpGlobals->v_forward` aliases the global -- anything inside
+        `CBaseEntity::Create` that remade the vectors would silently change the
+        caller's direction. Same family as the OpFor-rune non-virtual-base trap.
+        Also: `NailTouch` goes `SOLID_NOT` + `SetTouch(NULL)` before
+        `UTIL_Remove`, because `UTIL_Remove` only flags the edict and a second
+        touch in the same frame would land a second hit.
+        Pulse retuned to 0.1s with `TF_NAIL_SPIN` 36 (two pulses sweep a whole
+        72deg gap). Added the **active-grenade caps** while in here --
+        `MAX_NAIL_GRENS`/`MAX_NAPALM_GRENS`/`MAX_GAS_GRENS`/`MAX_CALTROP_CANS`
+        via a live `UTIL_FindEntityByClassname` count at prime time (`TF_ActiveCap`
+        + `TF_CountLive`), not a bookkept counter, so nothing can leak the slot.
+        Same round, user-reported: **napalm burned people underwater.** Fire is
+        now doused in three places, because the burn state has three entry
+        points: `TF_ApplyBurn` refuses a submerged player, the per-tick DoT in
+        `TeamFortress_GrenadeThink` clears `m_flTFBurnEnd` when they get in,
+        and `CTFNapalmGrenade::Detonate2` drops the `DMG_BURN` bit and skips the
+        lingering field entirely when it goes off in water. `NapalmField` also
+        extinguishes if its own point floods. One shared `TF_Douses()` accepts
+        `CONTENTS_WATER`/`CONTENTS_SLIME` but NOT lava. Notes:
+        - the fire field is `MOVETYPE_NONE`, which **never refreshes
+          `pev->waterlevel`** (`SV_Physics_None` does not call `SV_CheckWater`),
+          so it asks `UTIL_PointContents` instead of trusting the stale field.
+        - `UTIL_PointContents` -> `SV_PointContents` (`sv_world.c:823`) remaps
+          `CONTENTS_CURRENT_*` to `CONTENTS_WATER`, and `PM_CheckWater` stores the
+          remapped value in `pev->watertype` too, so a current brush still
+          douses. Use `SV_TruePointContents` only if you actually want currents.
+        - players: `TF_WATER_DOUSE` is waterlevel 2 (waist), so wading does not
+          put fire out but dunking does -- the standard TFC answer to burning.
+          `watertype` round-trips through pmove (`sv_pmove.c:555,610`), so it is
+          safe to test alongside waterlevel.
+        **Follow-up bug in Round C's own nail projectile, found from the user
+        asking "is it normal the Soldier's grenade does no damage?" (soldier
+        gren2 = nail).** `CTFGrenNail::Fire` set `pev->owner` to the thrower for
+        attribution -- but `SV_ClipToLinks` skips a mover's owner
+        (`sv_world.c:1194`), so **every nail passed straight through the person
+        who threw it**. Combine that with TFC-6 Half B (nobody can connect to a
+        PS3-hosted server), and the only reachable target in any test is
+        yourself: nail damage measured exactly zero, always. Real TFC nail
+        grenades do hurt the thrower. Fix: `pev->owner` stays NULL and the
+        attacker moves to an `EHANDLE m_hAttacker` on the entity. Also
+        `CTFNailGrenade::Detonate2` now goes `SOLID_NOT` while spraying, or the
+        hovering can eats its own nails; and `tf_grenade_nail` came back out of
+        `RemoveLiveGrenades` (ownerless, and it expires in `TF_NAIL_LIFE`).
+        **Reusable, this is a whole bug class on this goal: on a PS3 listen
+        server the host is the ONLY damageable player, so any projectile that
+        sets `pev->owner` for attribution is untestable and reads as "does no
+        damage". Check the owner-skip before believing a damage report.**
+        Second thing to know when reading a damage test here: `CBasePlayer::
+        TakeDamage` sends 80% of damage to armor (`ARMOR_RATIO 0.2`,
+        `player.cpp:526`), so a 9-damage nail costs a 200-armor soldier
+        **1 health** and 3.6 armor. Watch the armor number, not health.
+      - **HW round 5 (2026-09-10): models all correct (VALIDATED), napalm water
+        fix works (VALIDATED), caltrops drop instantly but do no damage and no
+        slow. Nail owner-skip fix not tested yet.** Caltrops were the SAME bug
+        class as the nail: `CTFCaltrop::ShardTouch` had two hand-rolled gates,
+        `if ( pOther == pOwner ) return;` and a `PlayerRelationship(...) ==
+        GR_TEAMMATE` test. You are your own teammate, so **both** blocked the
+        host -- and the host is the only damageable player here. Fix: deleted
+        both and let `TakeDamage` decide, because
+        `CHalfLifeTeamplay::FPlayerCanTakeDamage` already refuses a teammate
+        while `friendlyfire` is 0 **and explicitly allows self-damage** via its
+        `( pAttacker != pPlayer )` guard (`teamplay_gamerules.cpp:389`). Its
+        return value now gates the `leg_damage` slow too, so a refused teammate
+        is not silently slowed. **Reusable: never hand-roll a team/self test in
+        this tree -- route it through `FPlayerCanTakeDamage` and you get the
+        friendly-fire rule and self-damage for free.**
+        Two magnitude fixes in the same pass, both judgement calls, both named
+        `#define`s: `TF_CALTROP_LEG` is 2.0 not 1.0 (1 point == 10% for 2s was
+        imperceptible), and **`DMG_CALTROP` now bypasses armor** alongside
+        `DMG_FALL`/`DMG_DROWN` in `player.cpp` -- at `ARMOR_RATIO 0.2` a
+        6-damage caltrop cost exactly 1 health, which is indistinguishable from
+        the bug that was just fixed.
+      - **Caltrop HUD icon, 2026-09-10 (user: "an icon displayed bottom left
+        when hurt"). Mechanism found, one real bug fixed, one question open.**
+        The bottom-left icons are `CHudHealth`'s damage-type tiles, NOT status
+        icons -- `UpdateTiles` (`cl_dll/health.cpp:451`) puts them at
+        `x = giDmgWidth/8`, `y = ScreenHeight - giDmgHeight*2`, while
+        `CHudStatusIcons::Draw` is `x=5` from `ScreenHeight/2` going UP, i.e.
+        mid-left. Do not confuse the two.
+        **Real bug fixed: `DMG_CALTROP` polluted `m_bitsDamageType` forever.**
+        `UpdateClientData` ends with `m_bitsDamageType &= DMG_TIMEBASED`
+        (`player.cpp:4100`), and `DMG_TIMEBASED` is `~0x3fff` -- so every TFC
+        high bit (`DMG_CALTROP` 1<<30, `DMG_IGNOREARMOR` 1<<27, `DMG_HALLUC`
+        1<<31 ...) survives it for the life of the player, even though these are
+        damage *modifiers*, not ongoing conditions. Meanwhile `TakeDamage` sets
+        `m_bitsHUDDamage = -1` on every hit (`player.cpp:628`) to force a
+        `gmsgDamage` resend, so **any persistent bit that is also in
+        `DMG_SHOWNHUD` re-lights its tile on every later hit of any kind**.
+        Caltrops now clear `DMG_CALTROP|DMG_IGNOREARMOR` in
+        `TeamFortress_GrenadeThink` once `leg_damage` decays to 0.
+        **RESOLVED, and I had the request backwards:** the user's screenshot was
+        a *reference from real TFC on PC* (72.5 fps, above the PS3's 60 Hz
+        lock) -- they were asking for a MISSING feature, not reporting a stray
+        icon. Real TFC shows the same `dmg_caltrop` sprite twice: a bottom-left
+        damage tile AND a mid-left status icon. Checked against the user's own
+        `tfc/sprites/hud.txt`: `dmg_caltrop` is exactly 9 entries after
+        `dmg_bio` in both the 320 and 640 blocks, so the client's tile
+        `m_HUD_dmg_bio + 8` (`giDmgFlags[8]`) was already correct -- the server's
+        `DMG_SHOWNHUD` just never sent the bit. Fixed: `DMG_CALTROP` added to
+        `DMG_SHOWNHUD` (tile), plus `TF_SetLegIcon()` sends `gmsgStatusIcon`
+        `"dmg_caltrop"` on the 0->hurt edge of `leg_damage` and clears it when it
+        decays or on respawn (client status icons outlive death unless told).
+        `dmg_tranq` / `dmg_concuss` / `dmg_haluc` (sic) tiles also exist in
+        hud.txt and are still not in `DMG_SHOWNHUD` -- deliberately left, since
+        `DMG_TRANQ` and `DMG_CONCUSS` alias `DMG_MORTAR`/`DMG_SONIC`. **Trap while
+        investigating: TFC aliases `DMG_NOT_SELF` to `DMG_FREEZE`
+        (`cbase.h:959`), and `DMG_FREEZE` IS in `DMG_SHOWNHUD` -- so anything
+        flagged "don't hurt self" lights the COLD tile.** Same family:
+        `DMG_NAIL`=`DMG_SLASH`, `DMG_TRANQ`=`DMG_MORTAR`,
+        `DMG_CONCUSS`=`DMG_SONIC`.
+        Also corrected last round's armor hack: instead of naming `DMG_CALTROP`
+        in `player.cpp`'s armor condition, that condition now honours
+        **`DMG_IGNOREARMOR`** -- TFC's own flag (`cbase.h:947`), declared and
+        used by nothing in this tree until now. Caltrops send
+        `DMG_CALTROP|DMG_IGNOREARMOR`. Phase 3+ weapons can reuse the flag.
+      - **GROUND TRUTH FOUND 2026-09-11: the retail `tfc/dlls/tfc.so` in the
+        user's Steam install (`E:\SteamLibrary\steamapps\common\Half-Life\tfc`)
+        is the real TFC server shipped with full symbols AND DWARF.** Every
+        TFC-6 value can be read instead of guessed. Method + tooling in the
+        `reference_tfc_steam_install` memory; the two traps are (1) it is
+        non-PIC i386, so constants are absolute `[0x13....]` .rodata loads you
+        read from the file, and (2) think/touch pointers to global functions
+        show as immediate 0 -- resolve them from `llvm-objdump -R`.
+        **Round E, applied from tfc.so, awaiting HW** (user asked: grenades
+        "always get placed facing up"; Soldier's nail grenade "rises up, then
+        shoots (point blank deals damage), then explodes (killing the
+        soldier)"):
+        - **Orientation, all types:** `CTFPrimeGrenade::Spawn` never sets
+          angles and `Throw` zeroes `avelocity`, so TFC grenades fly and land
+          at angles 0 -- upright. Ours aimed them along the velocity and gave a
+          random pitch spin. Now `angles = avelocity = 0`.
+        - **Bounce:** own `TFBounceTouch` copied from TFC's `CGrenade::
+          BounceTouch` -- velocity x0.6 on the ground, silent below 30 u/s,
+          clink in the air. The HL one we used also dealt 1 club damage,
+          posted danger sounds and changed the model sequence.
+        - **Throw (`CTFPrimeGrenade::Throw`):** from the thrower's ORIGIN (not
+          eye+16), `forward*600 + up*(200+-10) + right*(+-10)`, **no inherited
+          player velocity**, gravity 0.81, friction 0.6 (ours: HL 0.5/0.8,
+          pitch-scaled speed capped 500).
+        - **Fuse:** `InitPriming` sets `heat = time + getPrimeTime() 3.0 +
+          getPinTime() 0.8`, and `Throw` copies it to `dmgtime`. **3.8 s from
+          prime** -- both Round A's 3 s and Round B's 4 s were guesses.
+        - **Nail grenade, the whole chain:** fuse -> `Explode`: NO blast, trace
+          up 32, `MOVETYPE_FLY`, `SOLID_NOT`, angles/velocity 0, `EF_NOINTERP`,
+          0.4 s -> `NailGrenadeNailEm` (0.1 s) -> `NailGrenadeLaunchNail`
+          x41, 0.1 s apart: yaw step `RANDOM_FLOAT(30,40)`, **4** server nails
+          per burst (the client event draws 5), ring yaw is `pev->angles.y`
+          -> `FinishedExplode`: a real grenade blast, 180 dmg,
+          `DMG_BLAST|DMG_RADIUS_QUAKE`, and **`tf_ng.sc` is THIS explosion** --
+          Round B wrongly played it at the fuse. Nails
+          (`CreateNailGrenNail` + `CTFNailgunNail::Spawn`/`NailTouch`):
+          `MOVETYPE_FLYMISSILE`, 1000 u/s, 6 s life, `EF_NODRAW`, **18 dmg**
+          (ours 9) via plain `TakeDamage(DMG_NAIL)` + `SpawnBlood` on a hit.
+          TFC sets the nail's `pev->owner` to the GRENADE and keeps the thrower
+          in an EHANDLE -- the same shape as our owner-skip fix. The event
+          packs `(ENTINDEX(owner)-1) << 11`, off by one vs the client's
+          `bound(1, idx, maxclients)`; reproduced as-is.
+        - **`::RadiusDamage` now honours `DMG_RADIUS_QUAKE`** (`combat.cpp`):
+          `damage = D - 0.5 * dist`, and the attacker takes 75% of their own
+          blast (both from tfc.so's global `RadiusDamage`). No existing caller
+          passes the flag, so nothing else changed. Radius stays `D * 2.5`
+          (`CBaseMonster::RadiusDamage`).
+        **Read from tfc.so but deliberately NOT applied yet** (not asked for):
+        `setDamage` per type -- frag **180** (ours 120) and it blasts with
+        `DMG_RADIUS_QUAKE`; MIRV **180** (ours 90); gas 10 (ours 0); **EMP 0**
+        (ours adds a 45 blast); napalm 20, conc 0, caltrop 0 already match.
+        MIRV bomblets also use `DMG_RADIUS_QUAKE` and play `tf_normalgren.sc`,
+        not `tf_mirv.sc`; their launch is `CTFBomblet::LaunchFromMirv`.
+        Caltrop's `getPrimeTime` is 0.5.
+      - **Round D** (still open): `DMSG_GREN_*` death messages,
+        `tf_weapon_genericprimedgrenade` in-hand model, gas hallucination
+        (`pHallucinationSounds1[]`, `tfort.cpp:147`), verify `v_idlescale` peak
+        vs real TFC, and the throw arc -- TFC grenades may not use the floaty HL
+        `gravity 0.5`; the knob is `TF_GREN_GRAVITY`.
   - **Phase 3**: projectile weapons (nailgun nails, soldier rockets,
     demoman GL + pipebombs, incendiary, tranq darts).
+    **WRITTEN 2026-09-11 from tfc.so; HW round 1 same day: user reports it
+    working (no per-weapon breakdown given).**
+    `dlls/tf_wpn_nails.cpp` now holds every projectile: `CTFNailgunNail`
+    (nail 9 / super 13 / tranq 20 + 15 s half speed / rail 25, all
+    EF_NODRAW, the client event draws them), `CTFRpgRocket` (900 u/s, 92-112,
+    radius = dmg, QUAKE falloff, parametric client path), `CTFIncendiaryCRocket`
+    (600 u/s, hits the victim twice with IGNITE, flat 15 in 180u),
+    `CTFGrenade` (GL 2.5 s fuse / 120, pipebombs `tf_gl_pipebomb`, 8 max, 0.6 s
+    arm for `detpipe`), `CTFFlamethrowerBurst` (600 u/s x 1 s, 15 + IGNITE)
+    and `CBasePlayer::Ignite` + `CTFFlame` (numflames x 2 per second, 5 s,
+    cap 4, doused above the waist). Shared: TFC `CGrenade::Explode` /
+    `ExplodeTouch` ported as `TF_ProjExplode` / `TF_ProjDirectHit` -- a direct
+    hit takes full dmg and `pev->enemy` keeps the victim out of the splash.
+    Engine-of-the-mod changes it needed, all [tfc.so]: `::RadiusDamage`
+    (no water test, enemy skip, WALLPIERCING, RADIUS_MAX, self 75%);
+    `CBasePlayer::TakeDamage` (player attacker x0.9 / quad x4, armorclass
+    halves, armor = floor(dmg*armortype), projectile knockback dmg x8 or x11
+    = rocket/pipe jumps, DMG_NOT_SELF, ignite); `CBaseMonster::TakeDamage`
+    self-push capped 55; `TeamFortress_SetSpeed` tranq halves, then legs,
+    then the aiming cap. Real `IsAlly`, `CreateTimer`/`FindTimer` ("timer"
+    entity), `Timer_Tranquilisation`, `UseSpecialSkill` (R3 = `special` on
+    the pad), `detpipe`, `TeamFortress_RemoveTimers` from `Killed`.
+    `gpGlobals->teamplay` now keeps mp_teamplay's bits (was forced to 1).
+    **Trap: `SUB_Remove()` frees the edict at once -- never from a touch; use
+    `UTIL_Remove` after going SOLID_NOT.** Host-testable only: rocket/pipe/GL
+    jumps, IC self-splash, pipe detonation; no second player can join (6b).
+  - **Team restrictions** (between Phase 3 and 4). **WRITTEN 2026-09-11 from
+    tfc.so; HW-VALIDATED same day: user confirmed enemy doors/triggers stay
+    shut, own doors open, team-only packs refused, dustbowl own-team spawns,
+    blue first-person hands (SetSkin fix).** Symptom: a blue player could open
+    red-only doors and use red-only triggers. Cause: `ActivationSucceeded` was
+    a `return FALSE` stub that nothing called. Now real in `tfortmap.cpp`,
+    with `APMeetsCriteria` (team_no + alive, `teamcheck` via
+    `info_tf_teamcheck`, playerclass, items_allowed, if_goal/group/item
+    states, has/hasnt item from group) and REVERSE_AP. Hooked exactly where
+    tfc.so calls it: MultiTouch, HurtTouch, TeleportTouch, CTriggerPush,
+    DoorActivate, CMomentaryDoor::Use, ButtonTouch/Use/TakeDamage (plus the
+    TFGA_SPANNER rules), CPlatTrigger (the trigger now copies the plat's
+    TFC fields, as tfc.so does), CBreakable::TakeDamage, `CanHaveItem`, and
+    team spawn selection. `info_player_teamspawn`/`i_p_t` are now `CTFSpawn`
+    (`CheckTeam`, skips goal_state REMOVED); `teamcheck` keys are strings.
+    **Open until Phase 5**: `else_goal` does nothing (needs
+    `ActivateDoResults`), and criteria that name an `info_tfgoal`/
+    `item_tfgoal` fail because those entities do not exist yet (rock2
+    red/blue switches, 2 ravelin triggers, dustbowl's items_allowed
+    trigger_once).
   - **Phase 4**: engineer (sentry build/aim/fire/upgrade, dispenser,
     spanner) + spy (disguise, feign death).
   - **Phase 5**: map goals/flags (`info_tfgoal`/`item_tfgoal`), map scripts,

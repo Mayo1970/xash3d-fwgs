@@ -1,18 +1,5 @@
-/***
-*
-*	TFC-6 Phase 1 -- server-side team + class selection and per-class loadouts.
-*
-*	tf15-client's dlls/ tree shipped no TFC gameplay: the client's VGUI team and
-*	class menus send "jointeam N" / bare class-name commands that nothing on the
-*	server handled, so a listen-server host could never leave the no-team,
-*	no-class, no-weapon state. This file wires those menus to real server logic:
-*	a default two-team model, the menu sends, the command handlers, and a
-*	class-stat/loadout table driven straight off tf_defs.h's PC_* constants.
-*
-*	Deferred to later TFC phases: grenades, projectile weapons, engineer/spy
-*	abilities, map goals, prematch, class scripts, respawn bags.
-*
-****/
+// TFC-6 server glue: team/class selection, per-class loadouts, class specials.
+// tf15-client's dlls/ shipped none of it, so the VGUI menus' commands went nowhere.
 
 #include "extdll.h"
 #include "util.h"
@@ -78,9 +65,8 @@ static const tf_class_info_t sTFClass[PC_LASTCLASS] =
 	TFCLASSROW( CIVILIAN ),    // PC_CIVILIAN
 };
 
-// TFC-6 Phase 1 diagnostic sink -- pfnServerPrint (Con_Printf), always logs,
-// unlike ALERT() which the engine drops at developer 0. Remove the TF_DIAG
-// calls once the loadout path is confirmed on hardware.
+// Always-on HW log: pfnServerPrint, since ALERT() is dropped at developer 0.
+// Remove the TF_DIAG calls once the loadout path is confirmed on hardware.
 static void TF_DIAG( const char *fmt, ... )
 {
 	char buf[256];
@@ -102,15 +88,15 @@ static int TF_CountCarried( CBasePlayer *pPlayer )
 	return n;
 }
 
-//=========================================================
-// Two-team Blue/Red default. A real map info_tfdetect parse (a later phase)
-// would override this; for now it is the only source of team data.
-//=========================================================
+// Two-team Blue/Red default, the only team data until a map info_tfdetect
+// parse (a later phase) overrides it.
 void TeamFortress_SetupDefaultTeams( void )
 {
-	// TFC is always teamplay; a listen server's teamplay cvar can be 0.
+	// TFC is always teamplay. Keep mp_teamplay's bits (retail listenserver.cfg
+	// sets 21) -- friendly fire, tranq and ignite read them.
+	float flTeamplay = CVAR_GET_FLOAT( "mp_teamplay" );
 	g_teamplay = 1;
-	gpGlobals->teamplay = 1;
+	gpGlobals->teamplay = ( flTeamplay >= 1.0f ) ? flTeamplay : 1.0f;
 
 	if ( number_of_teams >= 1.0f )
 		return;
@@ -147,9 +133,6 @@ void TeamFortress_SendTeamMenu( CBasePlayer *pPlayer )
 	TeamFortress_ShowVGUIMenu( pPlayer, MENU_TEAM );
 }
 
-//=========================================================
-// Team assignment
-//=========================================================
 static int TeamFortress_TeamWithFewest( void )
 {
 	int count[5] = { 0 };
@@ -198,6 +181,8 @@ void TeamFortress_JoinTeam( CBasePlayer *pPlayer, int iTeam )
 		WRITE_STRING( pPlayer->m_szTeamName );
 	MESSAGE_END();
 
+	pPlayer->TeamFortress_SetSkin();   // [tfc.so] TeamFortress_TeamSet does the same
+
 	MESSAGE_BEGIN( MSG_ALL, gmsgScoreInfo );
 		WRITE_BYTE( idx );
 		WRITE_SHORT( (int)pPlayer->pev->frags );
@@ -215,9 +200,6 @@ void TeamFortress_JoinTeam( CBasePlayer *pPlayer, int iTeam )
 	TeamFortress_ShowVGUIMenu( pPlayer, MENU_CLASS );
 }
 
-//=========================================================
-// Class assignment
-//=========================================================
 void TeamFortress_ChangeClass( CBasePlayer *pPlayer, int iClass )
 {
 	if ( pPlayer->team_no < 1 )
@@ -238,9 +220,9 @@ void TeamFortress_ChangeClass( CBasePlayer *pPlayer, int iClass )
 	pPlayer->nextpc = iClass;
 	pPlayer->lastpc = iClass;
 
-	// Phase 1: a class pick is a clean strip-and-respawn. Real TFC kills the
-	// player on a mid-life class change; that (and the frag penalty) is a later
-	// phase.
+	// A clean strip-and-respawn. Real TFC kills you on a mid-life class change
+	// (frag penalty is a later phase); the death's timer/pipe cleanup still runs.
+	pPlayer->TeamFortress_RemoveTimers();
 	pPlayer->RemoveAllItems( FALSE );
 	pPlayer->pev->deadflag = DEAD_NO;
 	pPlayer->pev->effects &= ~EF_NODRAW;
@@ -251,10 +233,8 @@ void TeamFortress_ChangeClass( CBasePlayer *pPlayer, int iClass )
 		pPlayer->Spawn();
 }
 
-//=========================================================
-// Per-class stats + loadout. Called from CTeamFortress::PlayerSpawn, which runs
-// at the tail of CBasePlayer::Spawn() after health/armor/ammo have been reset.
-//=========================================================
+// Per-class stats + loadout, from CTeamFortress::PlayerSpawn at the tail of
+// CBasePlayer::Spawn(), after health/armor/ammo have been reset.
 static void TeamFortress_GiveWeapons( CBasePlayer *pPlayer, int bits )
 {
 	static const struct { int bit; const char *cls; } wmap[] =
@@ -282,10 +262,8 @@ static void TeamFortress_GiveWeapons( CBasePlayer *pPlayer, int bits )
 		if ( !( bits & wmap[i].bit ) )
 			continue;
 
-		// Not GiveNamedItem(): the TFC weapon Spawn() functions never call
-		// FallInit()/SetTouch(), so GiveNamedItem's simulated DispatchTouch hits
-		// a NULL touch handler and the weapon is never added. Do what a real
-		// pickup's DefaultTouch does, straight -- same path CWeaponBox uses.
+		// Not GiveNamedItem(): TFC weapon Spawn() never sets a touch, so its simulated
+		// DispatchTouch adds nothing. Do DefaultTouch's work directly, as CWeaponBox does.
 		CBaseEntity *pWeapon = CBaseEntity::Create( wmap[i].cls, pPlayer->pev->origin,
 		                                            pPlayer->pev->angles, pPlayer->edict() );
 		if ( !pWeapon )
@@ -312,6 +290,9 @@ void TeamFortress_PlayerSpawn( CBasePlayer *pPlayer )
 	int pc = pPlayer->pev->playerclass;
 	TF_DIAG( "[tfc] PlayerSpawn enter: pc=%d team=%d\n", pc, pPlayer->team_no );
 
+	// [tfc.so] CBasePlayer::Spawn -> TeamFortress_SetSkin: class model + team colours
+	pPlayer->TeamFortress_SetSkin();
+
 	// No class yet: hold the player still and untouchable until they pick one.
 	// Phase 1 has no real observer camera; this is the minimal "wait here" state.
 	if ( pc < PC_SCOUT || pc >= PC_RANDOM )
@@ -336,7 +317,8 @@ void TeamFortress_PlayerSpawn( CBasePlayer *pPlayer )
 	pPlayer->m_iHideHUD = 0;
 
 	pPlayer->pev->health = pPlayer->pev->max_health = ci->health;
-	pPlayer->tfstate &= ~TFSTATE_AIMING;
+	pPlayer->tfstate &= ~( TFSTATE_AIMING | TFSTATE_TRANQUILISED | TFSTATE_RESET_FLAMETIME );
+	pPlayer->numflames = 0;
 	pPlayer->TeamFortress_SetSpeed();
 
 	pPlayer->pev->armorvalue = ci->initarmor;
@@ -344,9 +326,8 @@ void TeamFortress_PlayerSpawn( CBasePlayer *pPlayer )
 	pPlayer->armorclass = ci->armorclass;
 	pPlayer->maxarmor = ci->maxarmor;
 
-	// Keep both ammo representations in step: TFC weapon code reads ammo_shells
-	// etc directly, while the generic HUD/pickup path tracks m_rgAmmo via
-	// GiveAmmo().
+	// Keep both ammo representations in step: TFC weapons read ammo_shells etc,
+	// the generic HUD/pickup path tracks m_rgAmmo via GiveAmmo().
 	pPlayer->maxammo_shells  = ci->max_shells;
 	pPlayer->maxammo_nails   = ci->max_nails;
 	pPlayer->maxammo_cells   = ci->max_cells;
@@ -374,9 +355,79 @@ void TeamFortress_PlayerSpawn( CBasePlayer *pPlayer )
 	         pPlayer->m_pActiveItem ? STRING( pPlayer->m_pActiveItem->pev->classname ) : "(none)" );
 }
 
-//=========================================================
+static CBasePlayerWeapon *TF_ActiveWeapon( CBasePlayer *pPlayer )
+{
+	return pPlayer->m_pActiveItem ? (CBasePlayerWeapon *)pPlayer->m_pActiveItem->GetWeaponPtr() : NULL;
+}
+
+// [tfc.so] CBasePlayer::UseSpecialSkill ("special" -> "_special"). Scout's
+// detection list, spy disguise and engineer build come with later phases.
+void CBasePlayer::UseSpecialSkill( void )
+{
+	if ( !IsAlive() )
+		return;
+
+	CBasePlayerWeapon *pWeapon = TF_ActiveWeapon( this );
+
+	switch ( pev->playerclass )
+	{
+	case PC_SNIPER:
+		if ( pWeapon && FClassnameIs( pWeapon->pev, "tf_weapon_sniperrifle" ) && pWeapon->m_flNextSecondaryAttack <= 0.0f )
+			pWeapon->SecondaryAttack();
+		break;
+	case PC_SOLDIER:
+		if ( pWeapon )
+			pWeapon->Reload();
+		break;
+	case PC_DEMOMAN:
+		if ( pWeapon && pWeapon->m_flNextPrimaryAttack <= 0.0f )
+			ExplodeOldPipebomb( TRUE, FALSE );
+		break;
+	case PC_MEDIC:
+		SelectItem( "tf_weapon_medikit" );
+		break;
+	case PC_HVYWEAP:
+		SelectItem( "tf_weapon_ac" );
+		break;
+	case PC_PYRO:
+		SelectItem( "tf_weapon_flamethrower" );
+		break;
+	default:
+		break;
+	}
+}
+
+// [tfc.so] from Killed (and here, a class change): every pipe goes off, every
+// timer this player owns ends, and the states they drove are cleared.
+void CBasePlayer::TeamFortress_RemoveTimers( void )
+{
+	leg_damage = 0;
+	tfstate &= ~( TFSTATE_INFECTED | TFSTATE_HALLUCINATING | TFSTATE_TRANQUILISED );
+
+	// walk them all: UTIL_Remove only flags, so FindTimer would return the same one
+	CBaseEntity *pTimer = NULL;
+	while ( ( pTimer = UTIL_FindEntityByClassname( pTimer, "timer" ) ) != NULL )
+	{
+		if ( pTimer->pev->owner == edict() )
+			UTIL_Remove( pTimer );
+	}
+
+	ExplodeOldPipebomb( TRUE, TRUE );
+	TeamFortress_SetSpeed();
+}
+
+// Per-frame, from PlayerThink. [tfc.so] CBasePlayer::PreThink: water above the
+// waist puts every flame out.
+void TeamFortress_ProjectileThink( CBasePlayer *pPlayer )
+{
+	if ( pPlayer->pev->iuser1 == 0 && pPlayer->pev->waterlevel > 1 && pPlayer->numflames != 0.0f )
+	{
+		EMIT_SOUND_DYN( pPlayer->edict(), CHAN_ITEM, "ambience/steamburst1.wav", 1.0f, 0.8f, 0, PITCH_NORM );
+		pPlayer->numflames = 0;
+	}
+}
+
 // Command dispatch -- called from CTeamFortress::ClientCommand.
-//=========================================================
 BOOL TeamFortress_ClientCommand( CBasePlayer *pPlayer, const char *pcmd )
 {
 	// Phase 2: +gren1 / +gren2 (L1 / R1) prime + throw.
@@ -392,13 +443,24 @@ BOOL TeamFortress_ClientCommand( CBasePlayer *pPlayer, const char *pcmd )
 		return TRUE;
 	}
 
-	// F4-equivalent: reopen whichever selection the player still owes.
+	// Reopen whichever selection the player still owes, else the class special.
 	if ( FStrEq( pcmd, "_special" ) )
 	{
 		if ( pPlayer->team_no < 1 )
 			TeamFortress_ShowVGUIMenu( pPlayer, MENU_TEAM );
 		else if ( pPlayer->pev->playerclass < PC_SCOUT || pPlayer->pev->playerclass >= PC_RANDOM )
 			TeamFortress_ShowVGUIMenu( pPlayer, MENU_CLASS );
+		else
+			pPlayer->UseSpecialSkill();
+		return TRUE;
+	}
+
+	// [tfc.so] only once the current weapon is ready to fire again
+	if ( FStrEq( pcmd, "detpipe" ) )
+	{
+		CBasePlayerWeapon *pWeapon = TF_ActiveWeapon( pPlayer );
+		if ( pWeapon && pWeapon->m_flNextPrimaryAttack <= 0.0f )
+			pPlayer->ExplodeOldPipebomb( TRUE, FALSE );
 		return TRUE;
 	}
 
@@ -436,10 +498,6 @@ BOOL TeamFortress_ClientCommand( CBasePlayer *pPlayer, const char *pcmd )
 	return FALSE;
 }
 
-//=========================================================
-// Team-aware spawn point selection. Returns an info_player_teamspawn edict for
-// the player's team, or NULL to let the caller fall back to DM/start spawns.
-//=========================================================
 static bool TeamFortress_SpotClear( CBaseEntity *pSpot, CBaseEntity *pIgnore )
 {
 	CBaseEntity *pEnt = NULL;
@@ -451,6 +509,7 @@ static bool TeamFortress_SpotClear( CBaseEntity *pSpot, CBaseEntity *pIgnore )
 	return true;
 }
 
+// info_player_teamspawn for the player's team, or NULL to fall back to DM/start spawns.
 edict_t *TeamFortress_SelectTeamSpawnPoint( CBasePlayer *pPlayer )
 {
 	CBaseEntity *pSpot = NULL;
@@ -460,9 +519,11 @@ edict_t *TeamFortress_SelectTeamSpawnPoint( CBasePlayer *pPlayer )
 
 	while ( ( pSpot = UTIL_FindEntityByClassname( pSpot, "info_player_teamspawn" ) ) != NULL )
 	{
-		if ( pSpot->team_no != 0 && pSpot->team_no != pPlayer->team_no )
+		if ( !( (CTFSpawn *)pSpot )->CheckTeam( pPlayer->team_no ) || pSpot->goal_state == TFGS_REMOVED )
 			continue;
 		if ( pSpot->pev->origin == g_vecZero )
+			continue;
+		if ( cb_prematch_time <= gpGlobals->time && !ActivationSucceeded( pSpot, pPlayer, NULL ) )
 			continue;
 
 		pAnyTeam = pSpot;
@@ -473,20 +534,15 @@ edict_t *TeamFortress_SelectTeamSpawnPoint( CBasePlayer *pPlayer )
 	if ( nChoices > 0 )
 		return pChoices[RANDOM_LONG( 0, nChoices - 1 )]->edict();
 
-	// every matching spawn is currently blocked -- take one anyway rather than
-	// fall through to a possibly enemy-side DM spawn
+	// All matching spawns are blocked: take one anyway, not a possibly enemy-side DM spawn.
 	if ( pAnyTeam )
 		return pAnyTeam->edict();
 
 	return NULL;
 }
 
-//=========================================================
-// The tf_wpn_* weapons drain the scalar ammo_shells/nails/cells/rockets, but
-// the HUD reserve count comes from m_rgAmmo[] (gmsgAmmoX). Mirror the scalars
-// into m_rgAmmo each frame so SendAmmoUpdate picks up the change. One-way for
-// now -- no Phase 1 ammo pickup writes m_rgAmmo behind the weapons' backs.
-//=========================================================
+// tf_wpn_* drain ammo_shells etc but the HUD reserve reads m_rgAmmo[]: mirror them
+// each frame for SendAmmoUpdate. One-way -- no ammo pickup writes m_rgAmmo yet.
 void TeamFortress_SyncAmmo( CBasePlayer *pPlayer )
 {
 	int i;
