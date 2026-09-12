@@ -3858,7 +3858,217 @@ Goal ladder:
     red/blue switches, 2 ravelin triggers, dustbowl's items_allowed
     trigger_once).
   - **Phase 4**: engineer (sentry build/aim/fire/upgrade, dispenser,
-    spanner) + spy (disguise, feign death).
+    spanner) + spy (disguise, feign death). **CLOSED by the user 2026-09-12
+    after 4 HW rounds** -- "the goal of this phase was met", remaining polish
+    deferred to the teleporter phase.
+    **HW-confirmed:** command menu opens on the pad, dispenser and sentry both
+    build and place correctly, sentry sits at the right height on its legs,
+    spy disguise and feign death both work, no view snap on menu clicks.
+    **Written but NOT yet on hardware** (all landed after the last round):
+    the spy's knife loadout, the sentry legs entity, the team-coloured hit
+    glow, the `mp_teamplay` building-damage gate, and the continuous
+    `tf_build_freemetal`.
+    **Never testable solo, still unproven:** sentry target acquisition,
+    firing, level-3 rockets, spanner repair/upgrade/reload, dispenser refill,
+    spanner armour to a teammate. All of these need a second player, so they
+    are blocked behind TFC-6 half B, not behind Phase 4.
+    **Deferred to the teleporter phase:** teleporters themselves (`build 4`/
+    `build 5` answer `#Build_nobuild` today, the det commands are swallowed),
+    EMP-vs-building, the mortar, `DoDamageEffects` damage smoke, and
+    `CTFSentrygun::CheckSentry`'s malfunction path.
+    **WRITTEN 2026-09-12 from tfc.so, host-clang syntax-clean, NOT yet built
+    for PS3 and NOT HW-tested.** Two new files, no wscript change (glob):
+    - `dlls/tf_building.cpp` -- `CTFSentrygun` (`building_sentrygun`) and
+      `CTFDispenser` (`building_dispenser`), the whole build flow
+      (`TeamFortress_EngineerBuild`/`TeamFortress_Build`/
+      `Timer_FinishedBuilding`/`DestroyBuilding`/`Engineer_RemoveBuildings`),
+      the spanner hooks (`CTFSentrygun`/`CTFDispenser`/`CBasePlayer`
+      `::EngineerUse`), real `CheckBelowBuilding`/`CheckArea`, and the
+      `gmsgBuildState` sender. Also defines `teamsprint` and
+      `CBasePlayer::GiveTFAmmo`, both declared in this tree but never defined.
+    - `dlls/tf_spy.cpp` -- disguise (`SpyDisguise`/`SpyDisguiseEnemy`/
+      `SpyChangeSkin`/`SpyCalcName`/`Spy_RemoveDisguise`/
+      `Timer_SpyUndercoverThink`), feign death (`CanFeign`/
+      `TeamFortress_SpyFeignDeath`), the fake kill-feed line, and the
+      `gmsgFeignState` sender.
+    Edits: `tf_client.cpp` (command dispatch + per-spawn reset),
+    `tf_gamerules.cpp` (`PlayerThink` -> `TeamFortress_SpyThink` +
+    `TeamFortress_SendBuildState`), `player.h` (real `EngineerUse` decl,
+    `m_iszSavedWeaponModel`), `player.cpp` (`Killed` drops buildings and the
+    disguise), `subs.cpp` (5 stubs removed, now real), `client.cpp`
+    (`AddToFullPack` reports an undercover spy's cover team/class to
+    non-allies -- this is what puts the disguise on the enemy HUD),
+    `exports.txt` (+2 classnames), `engine/platform/ps3/in_ps3.c`
+    (**D-pad up -> `+commandmenu`: nothing else on the pad reaches the VGUI
+    command menu, so Phase 4 is unusable without it**).
+    Numbers, all [tfc.so]: sentry 150 hp / 25 shells / 100 max, scan arc
+    +-45 deg at `m_iBaseTurnRate` 6, FOV 0.7, range 1000, 16-damage bullets,
+    fire every 0.2 s at level 1 and 0.1 s above, upgrade x1.2 hp+maxshells
+    for 130 metal, level 3 adds 20 rockets at one per 3 s; dispenser
+    generates 20/30/15/20 + 50 armour every 12 s and hands out 20/20/10/10 +
+    20 armour a touch; spanner repairs at 5 metal per hp, gives a teammate 5
+    armour per metal capped at 50, refills 40 shells / 20 rockets; disguise
+    takes 4 s for your own team and 8 s for another; dismantle refunds a flat
+    100 metal, cancelling a build refunds nothing (both TFC-faithful).
+    **Traps handled, keep them in mind for Phase 5:**
+    - `Killed` in this tree is `(pevInflictor, pevAttacker, iGib)`. A 2-arg
+      override compiles and silently does NOT override.
+    - `Engineer_RemoveBuildings` runs inside `CBasePlayer::Killed`, so
+      building detonation is **deferred by 0.1 s**; a synchronous
+      `::RadiusDamage` there re-enters `TakeDamage` on the dying engineer.
+    - The sentry rocket's `pev->owner` is the ENGINEER (so kills credit him),
+      which means `SV_ClipToLinks` does not skip the sentry -- the muzzle is a
+      fixed 24 u offset outside the hull, not the model attachment, or the
+      rocket detonates on its own gun.
+    - Localisation tokens were all checked against retail `tfc/Titles.txt`:
+      it is `#Build_stop`, `#Sentry_destroyed`, `#Dispenser_destroyed`,
+      `#Disguise_Lost` (capital L) -- the obvious spellings do not exist.
+      Same failure class as the OpFor `#Team_Menu_Join` bug.
+    - Big-endian audited: nothing here casts a scalar to bytes. Every wire
+      path is `WRITE_BYTE`/`WRITE_SHORT`/`WRITE_COORD`/`WRITE_STRING`.
+    **Deliberately out of this phase:** teleporters (not in the Phase 4 line;
+    `build 4`/`build 5` answer `#Build_nobuild`, the det commands are
+    swallowed), the mortar, EMP-vs-building, `DoDamageEffects` smoke, and the
+    separate `building_sentrygun_base` pedestal entity (the sentry wears
+    `base.mdl` itself while building).
+    **Testing caveat -- read before judging the HW round:** the host is still
+    the only player (half B), and he is his own teammate, so the sentry will
+    never acquire anyone by default. `mp_friendlyfire 1` lifts the ally check
+    in `ValidTarget` as a **test aid, not TFC parity** -- that is the only way
+    to see it track and fire solo.
+      - **HW round 1 (2026-09-12): command menu opens, dispenser builds.**
+        User's four issues, all root-caused and fixed the same day:
+        1. **"Not enough room" wherever you build.** `CheckArea` was invented,
+           not read. tfc.so's is **not a hull-fit test**: it is
+           `UTIL_PointContents(origin)` (must be EMPTY or WATER) plus a
+           `human_hull` trace from the spot back to the builder's eyes. Round
+           1 traced a human hull centred on the floor, and that hull's bottom
+           is 36 u underground, so `fStartSolid` was always true. The build
+           spot was wrong too: **tfc.so puts the building at the PLAYER's own
+           origin height** (`(int)(origin.x + fwd.x*64)`, same for y, `z =
+           origin.z`, no ground trace) and lets `CheckBelowBuilding` switch it
+           to `MOVETYPE_TOSS` so it drops into place. Round 1 put it on the
+           floor itself, which is what made every hull test start solid.
+        2. **Cannot afford the sentry.** Not a bug: retail engineers spawn
+           with **100** metal (`TeamFortress_SetEquipment` sets `ammo_cells`
+           0x64, max 0xc8) and the sentry gate is `ammo_cells > 129`. The
+           blocker is that map ammo packs are Phase 5, so the only metal
+           source today is your own dispenser. Added **`tf_build_freemetal`**
+           (default 0, `FCVAR_SERVER`) which fills an engineer's metal on
+           spawn -- a **test aid, not parity**, same class as the
+           `mp_friendlyfire` sentry switch. Also fixed a real timing bug found
+           here: **tfc.so deducts the metal in the building's `Finished()`,
+           not when the build starts** (`CTFDispenser::Finished` does
+           `owner->ammo_cells -= 100` before taking its 25% ammo cut).
+        3. **Feign death: still able to jump, body still standing.** Two
+           causes. **Clearing `pev->button` does nothing to movement** --
+           `SV_ParseClientMove` feeds pmove the raw usercmd, not `pev`. The
+           flag that works is **`FL_FROZEN`** (`SV_PlayerIsFrozen`,
+           `sv_client.c:3308`), which zeroes movement, buttons and impulse but
+           **keeps viewangles** -- exactly the feign contract. Second,
+           `CBasePlayer::PostThink` calls `SetAnimation(PLAYER_IDLE/WALK)`
+           every frame on a live player, and `SetAnimation`'s own `FL_FROZEN`
+           clause forces `PLAYER_IDLE`, so the death pose never survived a
+           frame. `SetAnimation` now returns early while `is_feigning` unless
+           the request is `PLAYER_DIE`. `FL_FROZEN` is now also used for the
+           build freeze, which had the same jump hole.
+        4. **Disguise never completed** ("Going undercover..." and nothing).
+           The countdown lived on a spawned `timer` entity. Moved onto the
+           player (`m_iSpyDisguiseClass`/`m_iSpyDisguiseTeam`/
+           `m_flSpyDisguiseTime`) and ticked from `TeamFortress_SpyThink`,
+           the same path grenades already prove runs. Also: round 1 dropped
+           the cover on any attack **including during the countdown** (which
+           is what tfc.so does), so a held fire button silently cancelled it;
+           now only a **live** cover (`is_undercover == 1`) is broken by
+           firing, and `tf_weapon_axe` counts as the spy's knife (the spy is
+           given the axe, not `tf_weapon_knife`, and `CTFAxe::AxeHit` already
+           carries the backstab rules).
+      - **HW round 2 (2026-09-12): spy works, feign works, disguise works.**
+        Three issues left, all root-caused and fixed the same day:
+        1. **Still "not enough room" in open ground.** Round 1's rewrite had
+           the right shape but the wrong trace arguments: it passed
+           `dont_ignore_monsters` and ignored the BUILDER. The building is
+           `SOLID_BBOX` and sits exactly on the trace start, so it blocked its
+           own test and `fStartSolid` was true every single time. tfc.so
+           passes **`ignore_monsters` and ignores the BUILDING's own edict**
+           (`[pev+0x208]` at `0x82a16`) -- only world geometry may block it.
+           Confirmation the placement is right: tfc.so adds 18 to the start Z
+           when the builder is ducking, which lands the hull bottom on the
+           floor exactly as a standing builder's origin already does.
+        2. **Spy carried the crowbar.** `TeamFortress_SetEquipment` gives the
+           spy `tf_weapon_knife`; every other axe class gets `tf_weapon_axe`.
+           `WEAP_AXE` is one bit for two different weapons, so the loadout map
+           needs a per-class override. (`tf_weapon_knife` was already exported
+           and already precached by `W_Precache`.)
+        3. **The view snapped when clicking a VGUI entry.** `in_ps3.c` zeroed
+           the move axes only when `cls.key_dest == key_menu`, but **VGUI1
+           panels open over live gameplay** (`key_dest` stays `key_game`,
+           `ps3_wants_cursor` goes true) -- so the right stick drove the
+           cursor AND the view at once, and aiming up at a menu entry pitched
+           the player up. All four move/look axes are now zeroed under the
+           same condition `PS3_UpdateMenuCursor` uses, so the cursor and the
+           view can never both consume the stick. **This was engine-wide: it
+           hit the TFC team/class/MOTD panels too, not just Phase 4.**
+      - **HW round 3 (2026-09-12): builds work; the sentry was sunk into the
+        floor.** Cause: collapsing `building_sentrygun_base` away lost a real
+        offset. **tfc.so's `CTFSentrygunBase::Finished` places the gun at
+        `base->origin + (0,0,21.2)`** (`[0x14a5cc]`), and `sentry*.mdl` is
+        authored around that pivot, so an origin on the floor buries the model
+        to the waist. (The MDL headers are no help -- every one of these models
+        has an all-zero `bbmin`/`bbmax`.) `Finished()` now lifts by 21.2, and
+        **must set `MOVETYPE_FLY` first**: the build drop left it
+        `MOVETYPE_TOSS`, which would pull the lift straight back out. Same
+        round, read from tfc.so while in there: the dispenser is
+        **24 tall, not 48**, and `CreateDispenser` faces it at
+        `AngleMod(builder->angles.y + 180)` -- it looks AT the engineer.
+        Also reported: "build a dispenser and I must die to build anything
+        else", "build a sentry and it counts as if both exist". **Neither is a
+        flag bug -- it is the metal budget, and it is faithful.** The engineer's
+        cap is 200, a dispenser is 100 and a sentry is 130, so 230 never fits in
+        one load; whichever you build second has its `BS_CANB_*` bit cleared and
+        its menu entry vanishes, which reads as "already built". Retail refills
+        from map ammo packs between builds (Phase 5) or from your own dispenser
+        (20 metal per 12 s, 10 per touch). `tf_build_freemetal 1` now **tops an
+        engineer's metal up every frame** instead of only on spawn, so both
+        buildings can coexist for testing.
+      - **HW round 4 (2026-09-12): sentry height right, legs missing.** The
+        21.2 lift was only half the story -- **`base.mdl` IS the legs**, and it
+        stays as its own entity under the gun. Measured from the sequence
+        bboxes (the MDL header bbox is all zeros on every one of these models,
+        so read `mstudioseqdesc` `bbmin`/`bbmax` at +96/+108 instead):
+        `base.mdl` spans z 0..21.6, `sentry1/2/3.mdl` span z ~0..29/35/44 --
+        gun body only, drawn upward from their own origin. So the lift is
+        exactly the leg height and collapsing `building_sentrygun_base` away
+        always had to lose them. Now a real `CTFSentrygunBase`
+        (`building_sentrygun_base`, +1 exports line) is spawned by
+        `CTFSentrygun::Finished()` at the settled build spot, cross-linked
+        through `m_pOtherSection`, forwarding its damage to the gun, and
+        removed by both `Killed` and `DestroyBuilding`. Same measurement pass:
+        `dispenser.mdl` is 50 u tall but tfc.so gives it a 24 u box on purpose
+        -- do not "fix" that to match the model.
+      - **Sentry<->player audit (2026-09-12), asked for after round 4.** Three
+        findings, first two applied:
+        1. **The ally-damage rule for buildings is `mp_teamplay` bit 2 (value
+           4), NOT `mp_friendlyfire`.** `CBaseMonster::TakeDamage` blocks a
+           client attacker who is an ally and not the victim, unless the damage
+           is `DMG_BLAST` (blast always lands). Retail `listenserver.cfg` sets
+           `mp_teamplay 21`, so bit 2 is on and you cannot shoot your own
+           sentry. Our `CBaseMonster::TakeDamage` has no such gate, so the rule
+           lives in `TF_BuildingCanTakeDamage` in `tf_building.cpp` rather than
+           in shared monster code -- a placement deviation, same behaviour.
+        2. **A hit building flashes a team-coloured glow shell** --
+           `kRenderFxGlowShell`, `renderamt` 150, fading 40 per think
+           (`CTFSentrygun::TakeDamage` + `CheckShield`). Colours by team_no:
+           1 blue (0,0,255), 2 red (255,0,0), 3 yellow (245,255,0), else green
+           (0,215,45). This was missing entirely, so damaging a building gave
+           no feedback at all.
+        3. **Open:** `CTFSentrygun::TeamFortress_TakeEMPBlast` scales the blast
+           by the gun's stored shells/rockets, so a full sentry detonates hard.
+           Phase 2's EMP grenade does not reach buildings yet.
+        **Correction to an earlier read: vtable slot `+0x88` is `IsAlive()`,
+        not `IsPlayer()`.** `CBaseMonster::TakeDamage` uses it to route into
+        `DeadTakeDamage`. `CTFSentrygun::ValidTarget` checks both anyway, so no
+        behaviour changed -- but do not reuse the old label.
   - **Phase 5**: map goals/flags (`info_tfgoal`/`item_tfgoal`), map scripts,
     prematch, detpack.
 

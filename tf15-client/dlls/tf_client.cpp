@@ -9,6 +9,7 @@
 #include "gamerules.h"
 #include "teamplay_gamerules.h"
 #include "tf_defs.h"
+#include "game.h"
 
 extern int gmsgTeamInfo;
 extern int gmsgScoreInfo;
@@ -259,16 +260,22 @@ static void TeamFortress_GiveWeapons( CBasePlayer *pPlayer, int bits )
 
 	for ( int i = 0; i < (int)ARRAYSIZE( wmap ); i++ )
 	{
+		const char *pszCls = wmap[i].cls;
+
 		if ( !( bits & wmap[i].bit ) )
 			continue;
 
+		// [tfc.so] WEAP_AXE on a spy means the knife, not the crowbar.
+		if ( wmap[i].bit == WEAP_AXE && pPlayer->pev->playerclass == PC_SPY )
+			pszCls = "tf_weapon_knife";
+
 		// Not GiveNamedItem(): TFC weapon Spawn() never sets a touch, so its simulated
 		// DispatchTouch adds nothing. Do DefaultTouch's work directly, as CWeaponBox does.
-		CBaseEntity *pWeapon = CBaseEntity::Create( wmap[i].cls, pPlayer->pev->origin,
+		CBaseEntity *pWeapon = CBaseEntity::Create( (char *)pszCls, pPlayer->pev->origin,
 		                                            pPlayer->pev->angles, pPlayer->edict() );
 		if ( !pWeapon )
 		{
-			TF_DIAG( "[tfc]  %s -> Create() NULL (missing from exports.txt?)\n", wmap[i].cls );
+			TF_DIAG( "[tfc]  %s -> Create() NULL (missing from exports.txt?)\n", pszCls );
 			continue;
 		}
 		pWeapon->pev->spawnflags |= SF_NORESPAWN;
@@ -280,7 +287,7 @@ static void TeamFortress_GiveWeapons( CBasePlayer *pPlayer, int bits )
 			UTIL_Remove( pWeapon );   // don't leave a ghost trigger at the feet
 		int after = TF_CountCarried( pPlayer );
 
-		TF_DIAG( "[tfc]  %s -> carried %d->%d%s\n", wmap[i].cls, before, after,
+		TF_DIAG( "[tfc]  %s -> carried %d->%d%s\n", pszCls, before, after,
 		         after > before ? "" : "  (AddPlayerItem refused)" );
 	}
 }
@@ -289,6 +296,21 @@ void TeamFortress_PlayerSpawn( CBasePlayer *pPlayer )
 {
 	int pc = pPlayer->pev->playerclass;
 	TF_DIAG( "[tfc] PlayerSpawn enter: pc=%d team=%d\n", pc, pPlayer->team_no );
+
+	// Phase 4: a respawn is always undisguised, unfeigned and not mid-build.
+	pPlayer->is_feigning = 0;
+	pPlayer->is_undercover = 0;
+	pPlayer->undercover_team = 0;
+	pPlayer->undercover_skin = 0;
+	pPlayer->undercover_target = NULL;
+	pPlayer->m_iszSavedWeaponModel = iStringNull;
+	pPlayer->is_building = 0;
+	pPlayer->m_iClientBuildState = -1;
+	pPlayer->m_iClientIsFeigning = -1;
+	pPlayer->m_iSpyDisguiseClass = 0;
+	pPlayer->m_iSpyDisguiseTeam = 0;
+	pPlayer->m_flSpyDisguiseTime = 0;
+	pPlayer->pev->flags &= ~FL_FROZEN;
 
 	// [tfc.so] CBasePlayer::Spawn -> TeamFortress_SetSkin: class model + team colours
 	pPlayer->TeamFortress_SetSkin();
@@ -341,6 +363,14 @@ void TeamFortress_PlayerSpawn( CBasePlayer *pPlayer )
 	if ( ci->init_nails )   pPlayer->GiveAmmo( ci->init_nails,   "9mm",      ci->max_nails );
 	if ( ci->init_cells )   pPlayer->GiveAmmo( ci->init_cells,   "uranium",  ci->max_cells );
 	if ( ci->init_rockets ) pPlayer->GiveAmmo( ci->init_rockets, "rockets",  ci->max_rockets );
+
+	// Test aid, not parity: a retail engineer spawns with 100 metal and a sentry
+	// costs 130, so without Phase 5's ammo packs he can only ever build a dispenser.
+	if ( tf_build_freemetal.value && pPlayer->pev->playerclass == PC_ENGINEER )
+	{
+		pPlayer->ammo_cells = pPlayer->maxammo_cells;
+		pPlayer->GiveAmmo( pPlayer->maxammo_cells, "uranium", pPlayer->maxammo_cells );
+	}
 
 	TeamFortress_GiveWeapons( pPlayer, ci->weapons );
 
@@ -432,6 +462,13 @@ BOOL TeamFortress_ClientCommand( CBasePlayer *pPlayer, const char *pcmd )
 {
 	// Phase 2: +gren1 / +gren2 (L1 / R1) prime + throw.
 	if ( TeamFortress_GrenadeCommand( pPlayer, pcmd ) )
+		return TRUE;
+
+	// Phase 4: engineer build menu and spy disguise/feign.
+	if ( TeamFortress_BuildCommand( pPlayer, pcmd ) )
+		return TRUE;
+
+	if ( TeamFortress_SpyCommand( pPlayer, pcmd ) )
 		return TRUE;
 
 	if ( FStrEq( pcmd, "jointeam" ) )

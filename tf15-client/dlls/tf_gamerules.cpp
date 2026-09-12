@@ -333,4 +333,6 @@ void CTeamFortress::PlayerThink( CBasePlayer *pPlayer )
 	TeamFortress_SyncAmmo( pPlayer );
 	TeamFortress_GrenadeThink( pPlayer );
 	TeamFortress_ProjectileThink( pPlayer );
+	TeamFortress_SpyThink( pPlayer );
+	TeamFortress_SendBuildState( pPlayer );
 }

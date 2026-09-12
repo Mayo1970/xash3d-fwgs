@@ -1353,18 +1353,6 @@ void CBaseEntity::Timer_CeaseFireThink()
 {
 }
 
-void CBaseEntity::Timer_SpyUndercoverThink()
-{
-}
-
-void CBaseEntity::Timer_FinishedBuilding()
-{
-}
-
-void CBaseEntity::Timer_CheckBuildDistance()
-{
-}
-
 void CBaseEntity::Timer_DetpackDisarm()
 {
 }
@@ -1440,14 +1428,6 @@ void CBaseEntity::Timer_Infection()
 {
 }
 
-void CBaseEntity::CheckBelowBuilding( int iDist )
-{
-}
-
-int CBaseEntity::CheckArea( CBaseEntity *pIgnore )
-{
-	return 0;
-}
 
 void CBaseEntity::TeamFortress_CalcEMPDmgRad( float &dmg, float &rad )
 {

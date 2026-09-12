@@ -1283,6 +1283,12 @@ BOOL TeamFortress_GrenadeCommand( CBasePlayer *pPlayer, const char *pcmd );
 // TFC-6 Phase 3 -- projectile weapons (tf_wpn_nails.cpp, tf_client.cpp)
 void TeamFortress_ProjectileThink( CBasePlayer *pPlayer );
 
+// TFC-6 Phase 4 -- engineer buildings (tf_building.cpp) + spy (tf_spy.cpp)
+void TeamFortress_SendBuildState( CBasePlayer *pPlayer );
+BOOL TeamFortress_BuildCommand( CBasePlayer *pPlayer, const char *pcmd );
+void TeamFortress_SpyThink( CBasePlayer *pPlayer );
+BOOL TeamFortress_SpyCommand( CBasePlayer *pPlayer, const char *pcmd );
+
 // mapscript funcs
 void ParseTFServerSettings();
 void ParseTFMapSettings();

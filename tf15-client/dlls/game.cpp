@@ -119,6 +119,7 @@ void GameDLLInit( void )
 	CVAR_REGISTER( &timeleft );
 
 	CVAR_REGISTER( &friendlyfire );
+	CVAR_REGISTER( &tf_build_freemetal );
 	CVAR_REGISTER( &falldamage );
 	CVAR_REGISTER( &weaponstay );
 	CVAR_REGISTER( &forcerespawn );

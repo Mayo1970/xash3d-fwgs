@@ -7,6 +7,9 @@ aiscripted_sequence
 ambient_generic
 beam
 bodyque
+building_dispenser
+building_sentrygun
+building_sentrygun_base
 button_target
 cine_blood
 cycler

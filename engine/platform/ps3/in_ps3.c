@@ -146,6 +146,11 @@ static void PS3_SeedKeyboardBinds( void )
 		PS3_ModRebind( K_L1_BUTTON, "lastinv", "+gren1" );
 		PS3_ModRebind( K_R1_BUTTON, "invnext", "+gren2" );
 		PS3_ModRebind( K_RSTICK,    "impulse 100", "special" );
+
+		// D-pad up taps open the VGUI command menu (engineer build, spy
+		// disguise/feign); the cursor then picks an entry. Nothing else on
+		// the pad reaches it, so Phase 4 is unusable without this.
+		PS3_ModRebind( K_DPAD_UP,   "weapon_crowbar", "+commandmenu" );
 	}
 }
 
@@ -873,21 +878,25 @@ void Platform_RunEvents( void )
 		}
 	}
 
-	// In the menu with the cursor on, the stick moves the pointer only
-	// (PS3_UpdateMenuCursor reads the raw axes). Feed 0 to the nav axes so
-	// Joy_ProcessStick does not also step the highlighted item.
-	if( joy_cursor.value != 0.0f && cls.key_dest == key_menu )
+	// Whenever the cursor owns the stick -- the native menu, or a VGUI1 panel
+	// open over live gameplay -- every move and look axis must read 0. Same
+	// condition as PS3_UpdateMenuCursor, so the two can never both consume it.
+	// Gating only on key_dest left VGUI1 panels turning the view while you
+	// aimed at a menu entry, which read as the view snapping on every click.
+	if( joy_cursor.value != 0.0f && ( cls.key_dest == key_menu || ps3_wants_cursor ))
 	{
-		Joy_AxisMotionEvent( JOY_AXIS_SIDE, 0 );
-		Joy_AxisMotionEvent( JOY_AXIS_FWD,  0 );
+		Joy_AxisMotionEvent( JOY_AXIS_SIDE,  0 );
+		Joy_AxisMotionEvent( JOY_AXIS_FWD,   0 );
+		Joy_AxisMotionEvent( JOY_AXIS_YAW,   0 );
+		Joy_AxisMotionEvent( JOY_AXIS_PITCH, 0 );
 	}
 	else
 	{
-		Joy_AxisMotionEvent( JOY_AXIS_SIDE, PS3_ScaleStick( data.ANA_L_H ));
-		Joy_AxisMotionEvent( JOY_AXIS_FWD,  PS3_ScaleStick( data.ANA_L_V ));
+		Joy_AxisMotionEvent( JOY_AXIS_SIDE,  PS3_ScaleStick( data.ANA_L_H ));
+		Joy_AxisMotionEvent( JOY_AXIS_FWD,   PS3_ScaleStick( data.ANA_L_V ));
+		Joy_AxisMotionEvent( JOY_AXIS_YAW,   PS3_ScaleStick( data.ANA_R_H ));
+		Joy_AxisMotionEvent( JOY_AXIS_PITCH, PS3_ScaleStick( data.ANA_R_V ));
 	}
-	Joy_AxisMotionEvent( JOY_AXIS_YAW,   PS3_ScaleStick( data.ANA_R_H ));
-	Joy_AxisMotionEvent( JOY_AXIS_PITCH, PS3_ScaleStick( data.ANA_R_V ));
 	Joy_AxisMotionEvent( JOY_AXIS_LT,    PS3_ScaleTrigger( data.PRE_L2 ));
 	Joy_AxisMotionEvent( JOY_AXIS_RT,    PS3_ScaleTrigger( data.PRE_R2 ));
 }

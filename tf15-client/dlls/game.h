@@ -45,6 +45,7 @@ extern cvar_t teamplay;
 extern cvar_t fraglimit;
 extern cvar_t timelimit;
 extern cvar_t friendlyfire;
+extern cvar_t tf_build_freemetal;
 extern cvar_t falldamage;
 extern cvar_t weaponstay;
 extern cvar_t forcerespawn;

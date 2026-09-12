@@ -1026,6 +1026,18 @@ void CBasePlayer::Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int i
 	// [tfc.so] Killed -> RemoveTimers: pipes go off, tranq and other timers end
 	TeamFortress_RemoveTimers();
 
+	// Phase 4: buildings blow up with their engineer. The disguise is cleared by
+	// hand, not Spy_RemoveDisguise, so no SET_MODEL lands on the dying body.
+	TeamFortress_RemoveBuildings();
+	is_feigning = 0;
+	pev->flags &= ~FL_FROZEN;
+	m_flSpyDisguiseTime = 0;
+	is_undercover = 0;
+	undercover_team = 0;
+	undercover_skin = 0;
+	undercover_target = NULL;
+	m_iszSavedWeaponModel = iStringNull;
+
 	if( m_pTank != 0 )
 		m_pTank->Use( this, this, USE_OFF, 0 );
 
@@ -1099,6 +1111,11 @@ void CBasePlayer::SetAnimation( PLAYER_ANIM playerAnim )
 	int animDesired;
 	float speed;
 	char szAnim[64];
+
+	// A feigning spy must hold the death pose: PostThink re-animates a live
+	// player every frame, and the FL_FROZEN clause below would force IDLE.
+	if( is_feigning && playerAnim != PLAYER_DIE )
+		return;
 
 	speed = pev->velocity.Length2D();
 

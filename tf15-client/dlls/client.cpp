@@ -1489,6 +1489,19 @@ int AddToFullPack( struct entity_state_s *state, int e, edict_t *ent, edict_t *h
 		state->team		= ent->v.team;
 		state->playerclass	= ent->v.playerclass;
 
+		// TFC-6 Phase 4: an undercover spy reports his cover to everyone but
+		// his own team, which is what makes the disguise show on their HUD.
+		CBaseEntity *pEnt = CBaseEntity::Instance( ent );
+		CBaseEntity *pHost = CBaseEntity::Instance( host );
+		if( pEnt && pHost && pEnt != pHost && pEnt->is_undercover == 1
+		    && !pHost->IsAlly( pEnt->team_no ) )
+		{
+			if( pEnt->undercover_team )
+				state->team = pEnt->undercover_team;
+			if( pEnt->undercover_skin )
+				state->playerclass = pEnt->undercover_skin;
+		}
+
 		state->usehull		= ( ent->v.flags & FL_DUCKING ) ? 1 : 0;
 		state->health		= (int)ent->v.health;
 	}

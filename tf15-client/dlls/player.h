@@ -418,6 +418,7 @@ public:
 	void TeamFortress_SetSkin( void );
 
 	char *m_pszSavedWeaponModel;
+	string_t m_iszSavedWeaponModel;
 	int m_iTeamToDisguiseAs;
 	float m_DB_LastTimingTestTime;
 	int m_nFirstSpawn;
@@ -553,13 +554,9 @@ public:
 	// no body in the server-only tree TFC-2 vendored either. TFC-3 found a
 	// real definition in cl_dll/tfc/tf_baseentity.cpp -- it returns TRUE, a
 	// genuinely different default, not just another no-op -- so this is not
-	// a behavior-preserving CLIENT_DLL gate like the others nearby, just the
-	// correct one: each side keeps its own already-established default.
-#ifndef CLIENT_DLL
-	virtual BOOL EngineerUse( CBasePlayer *pPlayer ) { return FALSE; }
-#else
+	// TFC-6 Phase 4 gave the server side a real body (tf_building.cpp); the
+	// client keeps its own (cl_dll/tfc/tf_baseentity.cpp).
 	virtual BOOL EngineerUse( CBasePlayer *pPlayer );
-#endif
 	void TeamFortress_Discard( void );
 	void RemoveOldAmmobox( void );
 	void TeamFortress_SaveMe( void );
@@ -587,6 +584,9 @@ public:
 	int m_iClientIsDetpacking;
 	int m_iClientDetpackAmmo;
 	int m_iClientBuildState;
+	int m_iSpyDisguiseClass;
+	int m_iSpyDisguiseTeam;
+	float m_flSpyDisguiseTime;
 	int m_iClientRandomPC;
 	float m_flTeleporterEffectEndTime;
 
