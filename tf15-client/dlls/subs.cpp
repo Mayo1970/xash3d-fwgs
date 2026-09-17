@@ -177,6 +177,10 @@ LINK_ENTITY_TO_CLASS( DelayedUse, CBaseDelay )
 
 void CBaseDelay::SUB_UseTargets( CBaseEntity *pActivator, USE_TYPE useType, float value )
 {
+	// [tfc.so] every delayed trigger also applies its goal results to a player activator
+	if( !pActivator || pActivator->Classify() == CLASS_PLAYER )
+		DoResults( this, (CBasePlayer *)pActivator, TRUE );
+
 	// exit immediatly if we don't have a target or kill target
 	if( FStringNull( pev->target ) && !m_iszKillTarget )
 		return;
@@ -256,17 +260,11 @@ void SetMovedir( entvars_t *pev )
 	pev->angles = g_vecZero;
 }
 
+// [tfc.so] the delayed fire has no activator, whoever triggered it.
 void CBaseDelay::DelayThink( void )
 {
-	CBaseEntity *pActivator = NULL;
-
-	if( pev->owner != NULL )		// A player activated this on delay
-	{
-		pActivator = CBaseEntity::Instance( pev->owner );	
-	}
-
 	// The use type is cached (and stashed) in pev->button
-	SUB_UseTargets( pActivator, (USE_TYPE)pev->button, 0 );
+	SUB_UseTargets( NULL, (USE_TYPE)pev->button, 0 );
 	REMOVE_ENTITY( ENT( pev ) );
 }
 
@@ -473,26 +471,6 @@ BOOL FEntIsVisible( entvars_t *pev, entvars_t *pevTarget)
 	return FALSE;
 }
 
-void CBaseEntity::tfgoal_timer_tick()
-{
-}
-
-void CBaseEntity::ReturnItem()
-{
-}
-
-void CBaseEntity::item_tfgoal_touch( CBaseEntity *pOther )
-{
-}
-
-void CBaseEntity::tfgoal_touch( CBaseEntity *pOther )
-{
-}
-
-void CBaseEntity::DelayedResult()
-{
-}
-
 BOOL CBaseEntity::EngineerUse( CBasePlayer *pPlayer )
 {
 	return FALSE;
@@ -661,14 +639,18 @@ void CBaseEntity::KeyValue( KeyValueData *pkvd )
 		restore_group_no = atoi( pkvd->szValue );
 		pkvd->fHandled = TRUE;
 	}
-	else if( FStrEq( pkvd->szKeyName, "goal_min" ) )
+	else if( FStrEq( pkvd->szKeyName, "goal_min" ) || FStrEq( pkvd->szKeyName, "goal_max" ) )
 	{
-		UTIL_StringToVector( goal_min, pkvd->szValue );
-		pkvd->fHandled = TRUE;
-	}
-	else if( FStrEq( pkvd->szKeyName, "goal_max" ) )
-	{
-		UTIL_StringToVector( goal_max, pkvd->szValue );
+		// [tfc.so] an all-zero vector keeps the default
+		Vector vec;
+		UTIL_StringToVector( vec, pkvd->szValue );
+		if( vec != g_vecZero )
+		{
+			if( FStrEq( pkvd->szKeyName, "goal_min" ) )
+				goal_min = vec;
+			else
+				goal_max = vec;
+		}
 		pkvd->fHandled = TRUE;
 	}
 	else if( FStrEq( pkvd->szKeyName, "has_item_from_group" )
@@ -872,12 +854,17 @@ void CBaseEntity::KeyValuePartTwo( KeyValueData *pkvd )
 	else if( FStrEq( pkvd->szKeyName, "team_broadcast" )
 	    || FStrEq( pkvd->szKeyName, "b_t" ) )
 	{
-		axhitme = ALLOC_STRING( pkvd->szValue );
+		team_broadcast = ALLOC_STRING( pkvd->szValue );
 		pkvd->fHandled = TRUE;
 	}
 	else if( FStrEq( pkvd->szKeyName, "speak" ) )
 	{
 		speak = ALLOC_STRING( pkvd->szValue );
+		pkvd->fHandled = TRUE;
+	}
+	else if( FStrEq( pkvd->szKeyName, "AP_speak" ) )
+	{
+		AP_speak = ALLOC_STRING( pkvd->szValue );
 		pkvd->fHandled = TRUE;
 	}
 	else if( FStrEq( pkvd->szKeyName, "team_speak" ) )
@@ -1071,27 +1058,27 @@ void CBaseEntity::KeyValuePartTwo( KeyValueData *pkvd )
 	}
 	else if( FStrEq( pkvd->szKeyName, "invincible_finished" ) )
 	{
-		invincible_finished = atoi( pkvd->szValue );
+		invincible_finished = atof( pkvd->szValue );
 		pkvd->fHandled = TRUE;
 	}
 	else if( FStrEq( pkvd->szKeyName, "invisible_finished" ) )
 	{
-		invisible_finished = atoi( pkvd->szValue );
+		invisible_finished = atof( pkvd->szValue );
 		pkvd->fHandled = TRUE;
 	}
 	else if( FStrEq( pkvd->szKeyName, "super_damage_finished" ) )
 	{
-		super_damage_finished = atoi( pkvd->szValue );
+		super_damage_finished = atof( pkvd->szValue );
 		pkvd->fHandled = TRUE;
 	}
 	else if( FStrEq( pkvd->szKeyName, "radsuit_finished" ) )
 	{
-		radsuit_finished = atoi( pkvd->szValue );
+		radsuit_finished = atof( pkvd->szValue );
 		pkvd->fHandled = TRUE;
 	}
 	else if( FStrEq( pkvd->szKeyName, "deathtype" ) )
 	{
-		deathtype = atoi( pkvd->szValue );
+		deathtype = ALLOC_STRING( pkvd->szValue );
 		pkvd->fHandled = TRUE;
 	}
 	else if( FStrEq( pkvd->szKeyName, "speed_reduction" ) )
@@ -1174,11 +1161,28 @@ void CBaseEntity::KeyValuePartTwo( KeyValueData *pkvd )
 		owned_by_teamcheck = ALLOC_STRING( pkvd->szValue );
 		pkvd->fHandled = TRUE;
 	}
-	else if( FStrEq( pkvd->szKeyName, "team1_name" )
-	    || FStrEq( pkvd->szKeyName, "team2_name" )
-	    || FStrEq( pkvd->szKeyName, "team3_name" )
-	    || FStrEq( pkvd->szKeyName, "team4_name" )
-	    || FStrEq( pkvd->szKeyName, "number_of_teams" )
+	// [tfc.so] an info_tfdetect parks its team names in the speak strings
+	else if( FStrEq( pkvd->szKeyName, "team1_name" ) )
+	{
+		speak = ALLOC_STRING( pkvd->szValue );
+		pkvd->fHandled = TRUE;
+	}
+	else if( FStrEq( pkvd->szKeyName, "team2_name" ) )
+	{
+		AP_speak = ALLOC_STRING( pkvd->szValue );
+		pkvd->fHandled = TRUE;
+	}
+	else if( FStrEq( pkvd->szKeyName, "team3_name" ) )
+	{
+		team_speak = ALLOC_STRING( pkvd->szValue );
+		pkvd->fHandled = TRUE;
+	}
+	else if( FStrEq( pkvd->szKeyName, "team4_name" ) )
+	{
+		owners_team_speak = ALLOC_STRING( pkvd->szValue );
+		pkvd->fHandled = TRUE;
+	}
+	else if( FStrEq( pkvd->szKeyName, "number_of_teams" )
 	    || FStrEq( pkvd->szKeyName, "last_impulse" ) )
 	{
 		last_impulse = atoi( pkvd->szValue );
@@ -1285,35 +1289,6 @@ void CBaseEntity::KeyValuePartThree( KeyValueData *pkvd )
 		pkvd->fHandled = FALSE;
 }
 
-BOOL CBaseEntity::CheckExistence()
-{
-	return TRUE;
-}
-
-void CBaseEntity::DoRespawn()
-{
-}
-
-void CBaseEntity::tfgoalitem_dropthink()
-{
-}
-
-void CBaseEntity::DoDrop( Vector vecOrigin )
-{
-}
-
-void CBaseEntity::tfgoalitem_remove()
-{
-}
-
-void CBaseEntity::EndRoundEnd()
-{
-}
-
-void CBaseEntity::tfgoalitem_droptouch()
-{
-}
-
 BOOL CBaseEntity::IsTeammate( CBaseEntity *pOther )
 {
 	return TRUE;
@@ -1340,11 +1315,6 @@ BOOL CBaseEntity::IsAlly( CBaseEntity *pOther )
 	return IsAlly( pOther->team_no );
 }
 
-CBaseEntity *CBaseEntity::FindTeamSpawnPoint()
-{
-	return 0;
-}
-
 void CBaseEntity::Timer_AutokickThink()
 {
 }
@@ -1354,10 +1324,6 @@ void CBaseEntity::Timer_CeaseFireThink()
 }
 
 void CBaseEntity::Timer_DetpackDisarm()
-{
-}
-
-void CBaseEntity::Timer_DetpackSet()
 {
 }
 

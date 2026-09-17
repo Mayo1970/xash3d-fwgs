@@ -2616,7 +2616,41 @@ void DoTeleporterParticles( event_args_t *args )
 		else
 			particle->m_vVelocity = Vector( 0.0f, 0.0f, (float)( gEngfuncs.pfnRandomLong( -50, 50 ) - 75 ) );
 	}
+#else
+	// No particleman on PS3: same green 0.75 s sparks as engine temp sprites (32 px sprite, 6 u quad)
+	if ( !args )
+		return;
+
+	int iModel = gEngfuncs.pEventAPI->EV_FindModelIndex( "sprites/particle.spr" );
+	if ( !iModel )
+		return;
+
+	int iCount = gEngfuncs.pfnRandomLong( 10, 15 );
+	for ( int i = 0; i < iCount; i++ )
+	{
+		Vector p_org( args->origin[0] + gEngfuncs.pfnRandomLong( -15, 15 ),
+		              args->origin[1] + gEngfuncs.pfnRandomLong( -15, 15 ),
+		              args->bparam2 ? args->origin[2] + 98.0f : args->origin[2] + 12.0f );
+		float flSpeed = (float)( gEngfuncs.pfnRandomLong( -50, 50 ) + ( args->bparam2 ? -75 : 75 ) );
+		Vector p_vel( 0.0f, 0.0f, flSpeed );
+
+		TEMPENTITY *pTemp = gEngfuncs.pEfxAPI->R_TempSprite( p_org, p_vel, 0.19f, iModel, kRenderTransAdd,
+		                                                     kRenderFxNone, 1.0f, 0.65f, FTENT_FADEOUT );
+		if ( !pTemp )
+			continue;
+
+		pTemp->fadeSpeed = 10.0f;   // 0.65 s + 0.1 s fade = particleman's 0.75 s
+		pTemp->entity.curstate.rendercolor.r = 0;
+		pTemp->entity.curstate.rendercolor.g = 255;
+		pTemp->entity.curstate.rendercolor.b = 0;
+	}
 #endif
+}
+
+// PS3 forces cl_lw 0, so gpGlobals (set by client weapon prediction) stays NULL.
+static float EV_ListTime( void )
+{
+	return gpGlobals ? gpGlobals->time : gEngfuncs.GetClientTime();
 }
 
 void PlayTeleporterAmbientSound( event_args_t *args )
@@ -2624,9 +2658,11 @@ void PlayTeleporterAmbientSound( event_args_t *args )
 	if ( !args )
 		return;
 
-	if ( ( args->fparam2 == 0.0f || args->fparam2 <= gpGlobals->time ) && gEngfuncs.pfnRandomFloat( 0.0f, 1.0f ) > 0.98f )
+	float flTime = EV_ListTime();
+
+	if ( ( args->fparam2 == 0.0f || args->fparam2 <= flTime ) && gEngfuncs.pfnRandomFloat( 0.0f, 1.0f ) > 0.98f )
 	{
-		args->fparam2 = gpGlobals->time + 6.0f;
+		args->fparam2 = flTime + 6.0f;
 		gEngfuncs.pEventAPI->EV_PlaySound( -1, args->origin, CHAN_STATIC, "misc/teleport_ready.wav", VOL_NORM, 0.5f, 0, PITCH_NORM );
 	}
 }
@@ -2671,8 +2707,8 @@ void RemoveEvent( eventnode_t *node )
 		else
 			g_pEventListHead = NULL;
 
-		free( node->data );
-		free( node );
+		delete node->data;
+		delete node;
 	}
 	else
 	{
@@ -2690,8 +2726,8 @@ void RemoveEvent( eventnode_t *node )
 		else
 			node->prev->next = NULL;
 
-		free( node->data );
-		free( node );
+		delete node->data;
+		delete node;
 	}
 }
 
@@ -2793,25 +2829,11 @@ void RunEventList( void )
 {
 	eventnode_t *node;
 
-	// gpGlobals is only ever assigned inside HUD_InitClientWeapons(), which
-	// only runs from HUD_WeaponsPostThink() when cl_lw->value is true. PS3
-	// forces cl_lw permanently to "0" (read-only, common/defaults.h -- a
-	// deliberate goal-10 fix for a hard console lock triggered by client
-	// weapon prediction), so gpGlobals stays NULL for this build's entire
-	// lifetime. HUD_DrawTransparentTriangles calls this unconditionally
-	// every frame regardless of cl_lw, so the very first real in-game frame
-	// dereferences a null gpGlobals here -- a real, fully traced crash, not
-	// guessed. Same defensive idiom this SDK's own input_goldsource.cpp
-	// already uses for this exact pointer (`if ( gpGlobals && ... )`).
-	// Skipping event-list processing entirely without a valid clock is
-	// correct, not just crash-safe: nothing here is reachable without real
-	// client weapon prediction already being off on this platform.
-	if ( !gpGlobals )
-		return;
+	float flTime = EV_ListTime();
 
-	if ( g_flNextEventListThink == 0.0f || g_flNextEventListThink <= gpGlobals->time )
+	if ( g_flNextEventListThink == 0.0f || g_flNextEventListThink <= flTime )
 	{
-		g_flNextEventListThink = gpGlobals->time + 0.1f;
+		g_flNextEventListThink = flTime + 0.1f;
 
 		if ( !g_pEventListHead )
 			return;
@@ -2820,6 +2842,9 @@ void RunEventList( void )
 
 		while ( node )
 		{
+			// CheckEventsFinished may free this node
+			eventnode_t *next = node->next;
+
 			if ( ( node->data->iparam1 & EV_TELEPORTER_AMBIENT ) )
 			{
 				PlayTeleporterAmbientSound( node->data );
@@ -2849,17 +2874,8 @@ void RunEventList( void )
 				DoSparkSmokeEffect( node->data );
 			}
 
-			// Parens added only to silence -Werror=parentheses on '&'/'|' mixing,
-			// matching existing precedence exactly (& binds tighter than |) --
-			// NOT a behavior change. As written this differs from every sibling
-			// single-flag check above/below: it evaluates to
-			// (iparam1 & EV_TELEPORTER_ENTRY) | EV_TELEPORTER_EXIT, which is
-			// always nonzero whenever EV_TELEPORTER_EXIT itself is nonzero,
-			// regardless of iparam1 -- likely meant to test "ENTRY or EXIT set"
-			// the way the flag pair at lines 2812/2818 sets one or the other.
-			// Flagged for a later goal to confirm with the user, not silently
-			// changed here.
-			if ( ( ( node->data->iparam1 & EV_TELEPORTER_ENTRY ) | EV_TELEPORTER_EXIT ) )
+			// [client.so] rings for either end: tests iparam1 & 0xc
+			if ( node->data->iparam1 & ( EV_TELEPORTER_ENTRY | EV_TELEPORTER_EXIT ) )
 			{
 				DoTeleporterRings( node->data );
 			}
@@ -2871,7 +2887,7 @@ void RunEventList( void )
 
 			CheckEventsFinished( node );
 
-			node = node->next;
+			node = next;
 		}
 	}
 }

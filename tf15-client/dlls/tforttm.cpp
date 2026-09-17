@@ -1,6 +1,7 @@
 #include "extdll.h"
 #include "util.h"
 #include "cbase.h"
+#include "player.h"
 
 #include "tf_defs.h"
 
@@ -97,10 +98,51 @@ void TeamFortress_TeamSetColor( int tno )
 	rgbcolors[4] = { 0.0f, 255.0f, 0.0f };
 }
 
-// Velaron: TODO
 int TeamFortress_TeamGetNoPlayers( int tno )
 {
-	return 0;
+	int n = 0;
+
+	for ( int i = 1; i <= gpGlobals->maxClients; i++ )
+	{
+		CBaseEntity *pPlayer = UTIL_PlayerByIndex( i );
+		if ( pPlayer && pPlayer->team_no == tno )
+			n++;
+	}
+
+	return n;
+}
+
+int TeamFortress_TeamGetScoreFrags( int tno )
+{
+	return teamscores[tno];
+}
+
+// [tfc.so] slot 0 is civilian-only when its illegal-class mask is -1
+BOOL TeamFortress_TeamIsCivilian( float tno )
+{
+	if ( tno == 1.0f ) return ( civilianteams & 1 ) != 0;
+	if ( tno == 2.0f ) return ( civilianteams & 2 ) != 0;
+	if ( tno == 3.0f ) return ( civilianteams & 4 ) != 0;
+	if ( tno == 4.0f ) return ( civilianteams & 8 ) != 0;
+	if ( tno == 0.0f ) return illegalclasses[0] == -1;
+	return FALSE;
+}
+
+static const char *g_szTeamColors[5] = { "", "Blue", "Red", "Yellow", "Green" };
+
+void TeamFortress_TeamShowScores( BOOL bLong, CBasePlayer *pPlayer )
+{
+	for ( int i = 1; (float)i <= number_of_teams; i++ )
+	{
+		const char *pszLine = bLong
+			? UTIL_VarArgs( "Team %d (%s): %d\n", i, g_szTeamColors[i], teamscores[i] )
+			: UTIL_VarArgs( "%s: %d\n", g_szTeamColors[i], teamscores[i] );
+
+		if ( pPlayer )
+			ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, pszLine );
+		else
+			UTIL_ClientPrintAll( HUD_PRINTNOTIFY, pszLine );
+	}
 }
 
 // Velaron: TODO
@@ -114,17 +156,13 @@ BOOL TeamFortress_SortTeams( void )
 	if ( number_of_teams < 1.0f )
 		return TRUE;
 
-	// Velaron: TODO -- this stub falls through with no sorting logic; added a
-	// return to make the missing-return build error go away, not to claim
-	// this is implemented. Same "never compiled" pattern as the rest of this
-	// file (see the other Velaron: TODO stubs above, and BUILD_SERVER's
-	// default-off in upstream's own CMakeLists.txt).
+	// Velaron: TODO -- no sorting yet; the return only silences missing-return.
 	return TRUE;
 }
 
 void TeamFortress_TeamIncreaseScore( int tno, int scoretoadd )
 {
-	if ( tno <= 0 )
+	if ( tno <= 0 || tno > 4 )
 		return;
 	
 	teamscores[tno] += scoretoadd;

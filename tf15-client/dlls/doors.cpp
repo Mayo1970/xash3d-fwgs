@@ -721,6 +721,10 @@ void CBaseDoor::Blocked( CBaseEntity *pOther )
 	if( pev->dmg )
 		pOther->TakeDamage( pev, pev, pev->dmg, DMG_CRUSH );
 
+	// [tfc.so] a crushed detpack goes back to its owner
+	if( TeamFortress_DetpackBlocked( pOther ) )
+		return;
+
 	// if a door has a negative wait, it would never come back if blocked,
 	// so let it just squash the object to death real fast
 	if( m_flWait >= 0.0f )

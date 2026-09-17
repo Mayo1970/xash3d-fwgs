@@ -794,6 +794,9 @@ void ServerActivate( edict_t *pEdictList, int edictCount, int clientMax )
 		}
 	}
 
+	// [tfc.so] map settings read once every entity has spawned and activated
+	ParseTFMapSettings();
+
 	// Link user messages here to make sure first client can get them...
 	LinkUserMessages();
 }

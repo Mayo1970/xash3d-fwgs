@@ -63,11 +63,20 @@ static void S_RegisterClientEffectSounds( void )
 		registered, requested );
 }
 
-// The mod's client DLL plays these by name during gameplay (weapon event
-// scripts, HUD, temp entities) and the server precaches only some of them, so
-// a first use blocks the main thread in S_LoadSound past the ~110ms cushion.
-// Table is generated from the vendored client sources -- see
-// scripts/ps3_gen_sound_preload.py.
+// Per-gamedir VOX sentence-name prefix to preload on a multiplayer-only
+// title -- see S_BeginRegistration.
+static const struct
+{
+	const char *gamedir;
+	const char *prefix;
+} ps3_vox_sentence_prefix[] =
+{
+	{ "cstrike", "MRAD_" },
+	{ "tfc", "CTF_" },
+};
+
+// Mod client DLLs play these by name but the server precaches only some,
+// stalling S_LoadSound on first use; table from scripts/ps3_gen_sound_preload.py.
 static void S_RegisterModClientSounds( void )
 {
 	const ps3_sound_preload_t *tbl = NULL;
@@ -360,15 +369,36 @@ void S_BeginRegistration( void )
 	snd.have_ambient_sfx = false;
 
 #if XASH_PS3
-	// skip on multiplayer-only games (e.g. CS): they never speak vox words,
-	// and preloading CS's inherited HL1 sentences.txt cost 13.79Mb for nothing
 	if( GI->gamemode != GAME_MULTIPLAYER_ONLY )
 	{
 		PS3_ProbeMemory( "before VOX preload" );
-		VOX_PreloadDeferred();
+		VOX_PreloadDeferred( NULL );
 		PS3_ProbeMemory( "after VOX preload" );
 	}
-	else Con_Printf( "VOX preload skipped: %s is multiplayer-only\n", GI->gamefolder );
+	else
+	{
+		// Full sentences.txt costs 13.79Mb of unused HL1 words here, but a
+		// mod's own sentence group (CS radio + round/bomb/hostage: "MRAD_")
+		// is worth the matching-prefix preload below.
+		const char *prefix = NULL;
+
+		for( int i = 0; i < (int)ARRAYSIZE( ps3_vox_sentence_prefix ); i++ )
+		{
+			if( !Q_stricmp( GI->gamefolder, ps3_vox_sentence_prefix[i].gamedir ))
+			{
+				prefix = ps3_vox_sentence_prefix[i].prefix;
+				break;
+			}
+		}
+
+		if( prefix )
+		{
+			PS3_ProbeMemory( "before VOX preload" );
+			VOX_PreloadDeferred( prefix );
+			PS3_ProbeMemory( "after VOX preload" );
+		}
+		else Con_Printf( "VOX preload skipped: %s is multiplayer-only\n", GI->gamefolder );
+	}
 #endif
 
 	// check for automatic ambient sounds

@@ -512,6 +512,12 @@ void CHalfLifeMultiplay::ClientDisconnected( edict_t *pClient )
 					GETPLAYERUSERID( pPlayer->edict() ) );
 			}
 
+			// [tfc.so] drop carried goal items and clear everything the player owned
+			pPlayer->has_disconnected = TRUE;
+			pPlayer->CleanupOnPlayerDisconnection();
+			pPlayer->pev->playerclass = 0;
+			pPlayer->pev->health = 0;
+
 			pPlayer->RemoveAllItems( TRUE );// destroy all of the players weapons and items
 		}
 	}

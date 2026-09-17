@@ -4070,7 +4070,38 @@ Goal ladder:
         `DeadTakeDamage`. `CTFSentrygun::ValidTarget` checks both anyway, so no
         behaviour changed -- but do not reuse the old label.
   - **Phase 5**: map goals/flags (`info_tfgoal`/`item_tfgoal`), map scripts,
-    prematch, detpack.
+    prematch, detpack. User widened it (2026-09-16) to also take teleporters
+    and the Phase 4 polish (EMP-vs-building, mortar, damage smoke,
+    `CheckSentry`). Split into 5a goals / 5b detpack + teleporters / 5c polish.
+      - **5b -- detpack + teleporters. HW-VALIDATED 2026-09-17** (user: "it
+        worked").
+      - **5a -- goals, flags, map entities. HW-VALIDATED 2026-09-16** (user:
+        "everything seems correct"). Finished an uncommitted peer-session draft
+        (`tfortmap.cpp` goal system, `tf_clan.cpp` prematch/ceasefire) that
+        neither compiled nor linked. All from tfc.so:
+        - `exports.txt` had none of the goal classnames; added them plus
+          `func_nobuild` (274 on the 15 retail maps -- CheckArea searched for
+          them but none ever spawned), `func_nogrenades`, `item_armor1/2/3`.
+          `info_areadef` (location names) is still unlinked.
+        - Hook points, each read from tfc.so: carried items drop inside
+          `TeamFortress_RemoveTimers` and at feign start;
+          `ParseTFMapSettings` from `ServerActivate`;
+          `CleanupOnPlayerDisconnection` from
+          `CHalfLifeMultiplay::ClientDisconnected`; team-spawn messages,
+          `DoResults`, one-shot flags, spawn sound and the cease-fire freeze
+          all live in `CGameRules::GetPlayerSpawnSpot`, which uses the
+          round-robin `FindTeamSpawnPoint` (the random selector is gone).
+        - New bodies: `CheckClassStats`, `RemoveRockets`, `ForceRespawn`,
+          `ClientHearVox`, `DetpackStop`, `RemoveDetpacks` (`tf_detpack.cpp`),
+          `IsLegalClass`; ValClass now sends the map's class mask;
+          `civilian` works on a civilian-only team; `flaginfo`, `dropitems`,
+          `adm_ceasefire` (listen host only); `GiveTFAmmo` takes negatives.
+        - **Retail quirks kept:** `CBaseDelay::KeyValue` eats `killtarget`, so
+          a goal's killtarget never fires in retail either; armour packs
+          compare the player's armour VALUE with the pack's type.
+        - **Link check without a PS3 build:** host clang `-c -m32` over every
+          `dlls/`, `wpn_shared/`, `pm_shared/` file, then diff
+          `llvm-nm --defined-only` against `llvm-nm -u`.
 
   Phase-1 implementation notes from the Codex consult (verify each against
   live source before relying on it): send the team menu from

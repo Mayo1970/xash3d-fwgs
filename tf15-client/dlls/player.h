@@ -259,16 +259,8 @@ public:
 	char m_SbarString2[SBAR_STRING_SIZE];
 
 	virtual void Spawn( void );
-	// No definition anywhere in the server-only tree TFC-2 vendored, and
-	// never called server-side (only referenced via CBasePlayer's own
-	// vtable). TFC-3 found a real (also no-op) definition in
-	// cl_dll/tfc/tf_baseentity.cpp's client-only stub block -- CLIENT_DLL
-	// gate, same reason as cbase.h's TeamFortress_* virtuals.
-#ifndef CLIENT_DLL
-	virtual void PainSound( void ) { }
-#else
+	// Server body in player.cpp; the client's no-op lives in cl_dll/tfc/tf_baseentity.cpp.
 	virtual void PainSound( void );
-#endif
 	void Pain( void );
 	// Real bodies for these four live only in dlls/player.cpp (server-only,
 	// never compiled into the client) -- confirmed by a real "undefined

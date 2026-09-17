@@ -1,9 +1,5 @@
-/***
-*
-*	TFC-6 Phase 4 -- Spy disguise and feign death.
-*	Values read from the retail tfc/dlls/tfc.so unless marked.
-*
-****/
+// TFC-6 Phase 4 -- Spy disguise and feign death.
+// Values read from the retail tfc/dlls/tfc.so unless marked.
 
 #include "extdll.h"
 #include "util.h"
@@ -48,9 +44,7 @@ static const char *sTFClassNames[PC_LASTCLASS] =
 	"HWGuy", "Pyro", "Spy", "Engineer", "RandomPC", "Civilian"
 };
 
-//=========================================================
 // Disguise
-//=========================================================
 
 // Picks a real enemy whose name the HUD can show over the disguised spy.
 void CBasePlayer::TeamFortress_SpyCalcName( void )
@@ -165,9 +159,8 @@ void CBasePlayer::TeamFortress_SpyChangeSkin( int iClass )
 	ClientPrint( pev, HUD_PRINTNOTIFY, "#Disguise_start" );
 	is_undercover = 2;
 
-	// Counted down in TeamFortress_SpyThink, not on a "timer" entity: round 1
-	// showed "Going undercover..." and then nothing, and a player field cannot
-	// fail to tick the way a spawned think can.
+	// Counted down in TeamFortress_SpyThink: a spawned "timer" entity never fired
+	// on hardware, and a player field cannot fail to tick.
 	m_iSpyDisguiseClass = iClass;
 	m_iSpyDisguiseTeam = iTeam;
 	m_flSpyDisguiseTime = gpGlobals->time + iDelay;
@@ -295,9 +288,7 @@ void CBaseEntity::Timer_SpyUndercoverThink( void )
 	pev->nextthink = gpGlobals->time;
 }
 
-//=========================================================
 // Feign death
-//=========================================================
 
 // [tfc.so] nobody else may be standing on top of the spy.
 BOOL CBasePlayer::CanFeign( void )
@@ -326,6 +317,25 @@ static void TF_FakeDeathMessage( CBasePlayer *pPlayer )
 	MESSAGE_END();
 }
 
+// Shared by the feign get-up and a goal's forced respawn.
+void TeamFortress_SpyStandUp( CBasePlayer *pPlayer )
+{
+	pPlayer->is_feigning = 0;
+	pPlayer->tfstate &= ~TFSTATE_CANT_MOVE;
+	pPlayer->pev->flags &= ~FL_FROZEN;
+	pPlayer->pev->view_ofs = VEC_VIEW;
+	UTIL_SetSize( pPlayer->pev, VEC_HULL_MIN, VEC_HULL_MAX );
+	pPlayer->SetAnimation( PLAYER_IDLE );
+
+	if ( pPlayer->undercover_skin )
+		pPlayer->Spy_DisguiseExternalWeaponModel();
+	else
+		pPlayer->Spy_ResetExternalWeaponModel();
+
+	pPlayer->TeamFortress_SetSpeed();
+	pPlayer->TeamFortress_SetSkin();
+}
+
 void CBasePlayer::TeamFortress_SpyFeignDeath( BOOL bSilent )
 {
 	if ( pev->playerclass != PC_SPY || !IsAlive() )
@@ -344,20 +354,7 @@ void CBasePlayer::TeamFortress_SpyFeignDeath( BOOL bSilent )
 			return;
 		}
 
-		is_feigning = 0;
-		tfstate &= ~TFSTATE_CANT_MOVE;
-		pev->flags &= ~FL_FROZEN;
-		pev->view_ofs = VEC_VIEW;
-		UTIL_SetSize( pev, VEC_HULL_MIN, VEC_HULL_MAX );
-		SetAnimation( PLAYER_IDLE );
-
-		if ( undercover_skin )
-			Spy_DisguiseExternalWeaponModel();
-		else
-			Spy_ResetExternalWeaponModel();
-
-		TeamFortress_SetSpeed();
-		TeamFortress_SetSkin();
+		TeamFortress_SpyStandUp( this );
 	}
 	else
 	{
@@ -386,6 +383,9 @@ void CBasePlayer::TeamFortress_SpyFeignDeath( BOOL bSilent )
 			ClientPrint( pev, HUD_PRINTNOTIFY, "#Feign_noroom" );
 			return;
 		}
+
+		// [tfc.so] a feigning spy lets go of every goal item it may drop
+		TeamFortress_DropCarriedItems( this );
 
 		is_feigning = 1;
 		tfstate |= TFSTATE_CANT_MOVE;
@@ -452,9 +452,8 @@ void TeamFortress_SpyThink( CBasePlayer *pPlayer )
 		return;
 	}
 
-	// Firing blows a LIVE cover. TFC also cancels mid-countdown, but that read
-	// as the disguise silently doing nothing, so the countdown is left alone.
-	// The knife is the spy's axe slot here, and a backstab keeps the cover.
+	// Firing blows a LIVE cover only (TFC also cancels the countdown, which read as
+	// a silent failure). The knife is the axe slot; a backstab keeps the cover.
 	if ( pPlayer->is_undercover == 1 && ( pPlayer->pev->button & ( IN_ATTACK | IN_ATTACK2 ) ) )
 	{
 		CBasePlayerItem *pItem = pPlayer->m_pActiveItem;
@@ -464,9 +463,7 @@ void TeamFortress_SpyThink( CBasePlayer *pPlayer )
 	}
 }
 
-//=========================================================
 // Commands sent by the tf15 VGUI command menu
-//=========================================================
 
 BOOL TeamFortress_SpyCommand( CBasePlayer *pPlayer, const char *pcmd )
 {

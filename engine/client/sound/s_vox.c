@@ -720,10 +720,12 @@ static qboolean VOX_WordTokenIsSane( const char *word, qboolean report )
 	return true;
 }
 
-void VOX_PreloadDeferred( void )
+void VOX_PreloadDeferred( const char *prefix )
 {
 	int preloaded = 0;
 	int skipped = 0;
+	int considered = 0;
+	size_t prefix_len = prefix ? Q_strlen( prefix ) : 0;
 	// Progress UI and the summary line are first-run only: on later maps this
 	// loop is a cache walk that finishes far too fast to be worth drawing,
 	// and redrawing 1065 progress steps would cost more than the work itself.
@@ -738,6 +740,13 @@ void VOX_PreloadDeferred( void )
 	{
 		if( first_run )
 			SCR_BootProgress( "Precaching speech", i, cszrawsentences, false );
+
+		// Restrict to a mod's own sentence group (e.g. CS's "MRAD_" radio and
+		// round/bomb/hostage lines), not the whole inherited HL1 SP set.
+		if( prefix && Q_strnicmp( rgpszrawsentence[i], prefix, prefix_len ))
+			continue;
+
+		considered++;
 
 		char buffer[512] = { 0 }, szpath[32] = { 0 };
 		char *rgpparseword[CVOXWORDMAX] = { 0 };
@@ -781,8 +790,14 @@ void VOX_PreloadDeferred( void )
 	}
 
 	if( first_run )
-		Con_Printf( "VOX_PreloadDeferred: %d words preloaded from %d sentences, %d malformed tokens skipped\n",
-			preloaded, cszrawsentences, skipped );
+	{
+		if( prefix )
+			Con_Printf( "VOX_PreloadDeferred: %d words preloaded from %d/%d \"%s*\" sentences, %d malformed tokens skipped\n",
+				preloaded, considered, cszrawsentences, prefix, skipped );
+		else
+			Con_Printf( "VOX_PreloadDeferred: %d words preloaded from %d sentences, %d malformed tokens skipped\n",
+				preloaded, cszrawsentences, skipped );
+	}
 	else
 		Con_Printf( "VOX_PreloadDeferred: %d words re-stamped for servercount %d\n", preloaded, cl.servercount );
 }

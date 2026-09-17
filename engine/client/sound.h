@@ -164,7 +164,9 @@ void S_MusicFade( float fade_percent );
 void VOX_Init( void );
 void VOX_Shutdown( void );
 #if XASH_PS3
-void VOX_PreloadDeferred( void );
+// NULL preloads every sentence; a prefix restricts to a mod's own group
+// (e.g. CS radio/announcer sentences all start "MRAD_").
+void VOX_PreloadDeferred( const char *prefix );
 #endif
 void VOX_SetChanVol( channel_t *ch );
 void VOX_LoadSound( channel_t *pchan, const char *psz );

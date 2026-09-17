@@ -361,33 +361,63 @@ int TrainSpeed( int iSpeed, int iMax )
 	return iRet;
 }
 
-void CBasePlayer::DeathSound( void )
+// [tfc.so] CBasePlayer::PainSound. The drown gasp ignores the pain_finished debounce.
+void CBasePlayer::PainSound( void )
 {
-	// water death sounds
-	/*
-	if( pev->waterlevel == 3 )
+	if ( pev->health < 0 )
+		return;
+
+	if ( pev->watertype == CONTENTS_WATER && pev->waterlevel == 3 )
 	{
-		EMIT_SOUND( ENT( pev ), CHAN_VOICE, "player/h2odeath.wav", 1, ATTN_NONE );
+		const char *pszSample = RANDOM_FLOAT( 0.0f, 1.0f ) > 0.5f ? "player/drown1.wav" : "player/drown2.wav";
+		EMIT_SOUND_DYN( ENT( pev ), CHAN_VOICE, pszSample, 1.0f, 0.8f, 0, PITCH_NORM );
 		return;
 	}
-	*/
 
-	// temporarily using pain sounds for death sounds
-	switch( RANDOM_LONG( 1, 5 ) )
+	if ( pev->pain_finished > gpGlobals->time )
 	{
-	case 1: 
-		EMIT_SOUND( ENT( pev ), CHAN_VOICE, "player/pl_pain5.wav", 1, ATTN_NORM );
-		break;
-	case 2: 
-		EMIT_SOUND( ENT( pev ), CHAN_VOICE, "player/pl_pain6.wav", 1, ATTN_NORM );
-		break;
-	case 3: 
-		EMIT_SOUND( ENT( pev ), CHAN_VOICE, "player/pl_pain7.wav", 1, ATTN_NORM );
-		break;
+		axhitme = 0;
+		return;
 	}
 
-	// play one of the suit death alarms
-	EMIT_GROUPNAME_SUIT( ENT( pev ), "HEV_DEAD" );
+	pev->pain_finished = gpGlobals->time + 0.5f;
+
+	if ( axhitme == 1 )
+	{
+		axhitme = 0;
+		EMIT_SOUND_DYN( ENT( pev ), CHAN_VOICE, "player/axhit1.wav", 1.0f, 0.8f, 0, PITCH_NORM );
+		return;
+	}
+
+	static const char *const pszPain[] =
+	{
+		"player/pain1.wav", "player/pain2.wav", "player/pain3.wav",
+		"player/pain4.wav", "player/pain5.wav", "player/pain6.wav",
+	};
+
+	EMIT_SOUND_DYN( ENT( pev ), CHAN_VOICE, pszPain[RANDOM_LONG( 1, 6 ) - 1], 1.0f, 0.8f, 0, PITCH_NORM );
+}
+
+// [tfc.so] CBasePlayer::DeathSound: death2.wav is never picked, and there is no suit alarm.
+void CBasePlayer::DeathSound( void )
+{
+	if ( pev->waterlevel == 3 )
+	{
+		EMIT_SOUND_DYN( ENT( pev ), CHAN_VOICE, "player/h2odeath.wav", 1.0f, ATTN_NONE, 0, PITCH_NORM );
+		return;
+	}
+
+	const char *pszSample;
+
+	switch ( RANDOM_LONG( 1, 4 ) )
+	{
+	case 1: pszSample = "player/death1.wav"; break;
+	case 2: pszSample = "player/death3.wav"; break;
+	case 3: pszSample = "player/death4.wav"; break;
+	default: pszSample = "player/death5.wav"; break;
+	}
+
+	EMIT_SOUND_DYN( ENT( pev ), CHAN_VOICE, pszSample, 1.0f, 0.8f, 0, PITCH_NORM );
 }
 
 // override takehealth
@@ -1026,9 +1056,11 @@ void CBasePlayer::Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int i
 	// [tfc.so] Killed -> RemoveTimers: pipes go off, tranq and other timers end
 	TeamFortress_RemoveTimers();
 
-	// Phase 4: buildings blow up with their engineer. The disguise is cleared by
-	// hand, not Spy_RemoveDisguise, so no SET_MODEL lands on the dying body.
-	TeamFortress_RemoveBuildings();
+	// first, so a dying engineer is no longer a traveller when his teleporters go
+	PlayerStoppedTeleporting( this );
+
+	// [tfc.so] buildings survive death, cleared at Spawn()/TeamSet/disconnect instead.
+	// Disguise cleared by hand here, not Spy_RemoveDisguise, so no SET_MODEL on the corpse.
 	is_feigning = 0;
 	pev->flags &= ~FL_FROZEN;
 	m_flSpyDisguiseTime = 0;
@@ -1557,6 +1589,10 @@ void CBasePlayer::StartDeathCam( void )
 
 void CBasePlayer::StartObserver( Vector vecPosition, Vector vecViewAngle )
 {
+	// [tfc.so]
+	PlayerStoppedTeleporting( this );
+	TeleporterResetEffects( this );
+
 	// clear any clientside entities attached to this player
 	MESSAGE_BEGIN( MSG_PAS, SVC_TEMPENTITY, pev->origin );
 		WRITE_BYTE( TE_KILLPLAYERATTACHMENTS );
@@ -1880,17 +1916,22 @@ void CBasePlayer::TF_AddFrags( int iFrags )
 void CBasePlayer::InitStatusBar()
 {
 	m_flStatusBarDisappearDelay = 0;
-	m_SbarString1[0] = m_SbarString0[0] = 0; 
+	m_SbarString2[0] = m_SbarString1[0] = m_SbarString0[0] = 0;
 }
 
+// [tfc.so] TeamFortress_UpdateStatusBar layout: lines 0/1 are rebuilt each update
+// (engineer status), line 2 is the ID line the client centres with hud_centerid.
 void CBasePlayer::UpdateStatusBar()
 {
 	int newSBarState[SBAR_END] = {0};
-	char sbuf0[SBAR_STRING_SIZE];
-	char sbuf1[ SBAR_STRING_SIZE ];
+	char sbuf0[SBAR_STRING_SIZE] = "";
+	char sbuf1[SBAR_STRING_SIZE] = "";
+	char sbuf2[SBAR_STRING_SIZE];
 
-	strcpy( sbuf0, m_SbarString0 );
-	strcpy( sbuf1, m_SbarString1 );
+	strcpy( sbuf2, m_SbarString2 );
+
+	if ( pev->playerclass == PC_ENGINEER && IsAlive() )
+		TeamFortress_EngineerStatusBar( this, sbuf0, sbuf1, &newSBarState[SBAR_ENG_BUILDINGAMMO] );
 
 	// Find an ID Target
 	TraceResult tr;
@@ -1908,7 +1949,7 @@ void CBasePlayer::UpdateStatusBar()
 			if( pEntity->Classify() == CLASS_PLAYER )
 			{
 				newSBarState[SBAR_ID_TARGETNAME] = ENTINDEX( pEntity->edict() );
-				strcpy( sbuf1, "1 %p1\n2 Health: %i2%%\n3 Armor: %i3%%" );
+				strcpy( sbuf2, "1 %p1\n2 Health: %i2%%\n3 Armor: %i3%%" );
 
 				// allies and medics get to see the targets health
 				if( g_pGameRules->PlayerRelationship( this, pEntity ) == GR_TEAMMATE )
@@ -1954,6 +1995,17 @@ void CBasePlayer::UpdateStatusBar()
 		strcpy( m_SbarString1, sbuf1 );
 
 		// make sure everything's resent
+		bForceResend = TRUE;
+	}
+
+	if( strcmp( sbuf2, m_SbarString2 ) )
+	{
+		MESSAGE_BEGIN( MSG_ONE, gmsgStatusText, NULL, pev );
+			WRITE_BYTE( 2 );
+			WRITE_STRING( sbuf2 );
+		MESSAGE_END();
+
+		strcpy( m_SbarString2, sbuf2 );
 		bForceResend = TRUE;
 	}
 
@@ -2972,6 +3024,8 @@ ReturnSpot:
 
 void CBasePlayer::Spawn( void )
 {
+	TeleporterResetEffects( this );   // [tfc.so]
+
 	pev->classname = MAKE_STRING( "player" );
 	pev->health = 100;
 	pev->armorvalue = 0;
@@ -2996,6 +3050,17 @@ void CBasePlayer::Spawn( void )
 
 	g_engfuncs.pfnSetPhysicsKeyValue( edict(), "slj", "0" );
 	g_engfuncs.pfnSetPhysicsKeyValue( edict(), "hl", "1" );
+
+	// [tfc.so] Spawn: "tfc" gates the shared TFC movement/sounds, "ta" packs teamallies 5 bits per team
+	g_engfuncs.pfnSetPhysicsKeyValue( edict(), "tfc", "1" );
+	{
+		char szAllies[32];
+		unsigned int iAllies = 0;
+		for ( int i = 0; i < 5; i++ )
+			iAllies |= ( (unsigned int)teamallies[i] & 0x1F ) << ( 5 * i );
+		_snprintf( szAllies, sizeof( szAllies ), "%u", iAllies );
+		g_engfuncs.pfnSetPhysicsKeyValue( edict(), "ta", szAllies );
+	}
 
 	pev->fov = m_iFOV = 0;// init field of view.
 	m_iClientFOV = -1; // make sure fov reset is sent
@@ -4095,6 +4160,13 @@ void CBasePlayer::UpdateClientData( void )
 		MESSAGE_END();
 
 		InitStatusBar();
+	}
+
+	// [tfc.so] a team spawn's message, held until the HUD is up
+	if( delayed_spawn_message )
+	{
+		UTIL_ShowMessage( STRING( delayed_spawn_message ), this );
+		delayed_spawn_message = iStringNull;
 	}
 
 	if( m_iHideHUD != m_iClientHideHUD )

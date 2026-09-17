@@ -124,11 +124,10 @@ void TeamFortress_SendTeamMenu( CBasePlayer *pPlayer )
 			WRITE_STRING( GetTeamName( i ) );
 	MESSAGE_END();
 
-	// ValClass carries the illegal-class bitmask per team slot (0..4); zero
-	// everywhere means every class is selectable.
+	// [tfc.so] ValClass: the map's illegal-class mask per team slot, -1 for civilian-only
 	MESSAGE_BEGIN( MSG_ONE, gmsgValidClasses, NULL, pPlayer->edict() );
 		for ( int i = 0; i < 5; i++ )
-			WRITE_SHORT( 0 );
+			WRITE_SHORT( TeamFortress_TeamIsCivilian( (float)i ) ? -1 : illegalclasses[i] );
 	MESSAGE_END();
 
 	TeamFortress_ShowVGUIMenu( pPlayer, MENU_TEAM );
@@ -164,6 +163,10 @@ void TeamFortress_JoinTeam( CBasePlayer *pPlayer, int iTeam )
 		iTeam = TeamFortress_TeamWithFewest();          // covers "jointeam 5" (auto)
 
 	TF_DIAG( "[tfc] JoinTeam: team=%d (%s)\n", iTeam, GetTeamName( iTeam ) );
+
+	// [tfc.so] TeamFortress_TeamSet: a team change always drops old buildings,
+	// even for an engineer staying an engineer -- they'd sit on the wrong side.
+	pPlayer->TeamFortress_RemoveBuildings();
 
 	pPlayer->team_no = iTeam;
 	pPlayer->pev->team = iTeam;
@@ -209,10 +212,31 @@ void TeamFortress_ChangeClass( CBasePlayer *pPlayer, int iClass )
 		return;
 	}
 
-	if ( iClass == PC_RANDOM )
-		iClass = RANDOM_LONG( PC_SCOUT, PC_ENGINEER );
+	// [tfc.so] a civilian-only team takes nothing else
+	if ( TeamFortress_TeamIsCivilian( (float)pPlayer->team_no ) != ( iClass == PC_CIVILIAN ) )
+	{
+		ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, "#Game_nochangeclass" );
+		return;
+	}
 
-	if ( iClass < PC_SCOUT || iClass > PC_ENGINEER )
+	if ( iClass != PC_CIVILIAN && !pPlayer->IsLegalClass( iClass ) )
+	{
+		ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, "#Game_cantplayclass" );
+		return;
+	}
+
+	if ( iClass == PC_RANDOM )
+	{
+		// the map may bar some classes; bounded so a fully barred team cannot hang
+		for ( int i = 0; i < 32; i++ )
+		{
+			iClass = RANDOM_LONG( PC_SCOUT, PC_ENGINEER );
+			if ( pPlayer->IsLegalClass( iClass ) )
+				break;
+		}
+	}
+
+	if ( ( iClass < PC_SCOUT || iClass > PC_ENGINEER ) && iClass != PC_CIVILIAN )
 		return;
 
 	TF_DIAG( "[tfc] ChangeClass: pc=%d observer=%d\n", iClass, pPlayer->IsObserver() );
@@ -222,7 +246,7 @@ void TeamFortress_ChangeClass( CBasePlayer *pPlayer, int iClass )
 	pPlayer->lastpc = iClass;
 
 	// A clean strip-and-respawn. Real TFC kills you on a mid-life class change
-	// (frag penalty is a later phase); the death's timer/pipe cleanup still runs.
+	// (frag penalty is a later phase); Spawn() below does the building cleanup, as it does for any respawn.
 	pPlayer->TeamFortress_RemoveTimers();
 	pPlayer->RemoveAllItems( FALSE );
 	pPlayer->pev->deadflag = DEAD_NO;
@@ -232,6 +256,19 @@ void TeamFortress_ChangeClass( CBasePlayer *pPlayer, int iClass )
 		pPlayer->StopObserver();        // StopObserver() itself calls Spawn()
 	else
 		pPlayer->Spawn();
+}
+
+// [tfc.so] a class is illegal if the map bars it for everyone or for the player's team.
+BOOL CBasePlayer::IsLegalClass( int pc )
+{
+	static const int iBits[PC_RANDOM + 1] = { 0, 1, 2, 4, 8, 0x10, 0x20, 0x40, 0x100, 0x200, 0x80 };
+
+	int iBit = ( pc >= 0 && pc <= PC_RANDOM ) ? iBits[pc] : 0;
+
+	if ( illegalclasses[0] & iBit )
+		return FALSE;
+
+	return ( team_no >= 0 && team_no <= 4 ) ? !( illegalclasses[team_no] & iBit ) : TRUE;
 }
 
 // Per-class stats + loadout, from CTeamFortress::PlayerSpawn at the tail of
@@ -297,6 +334,11 @@ void TeamFortress_PlayerSpawn( CBasePlayer *pPlayer )
 	int pc = pPlayer->pev->playerclass;
 	TF_DIAG( "[tfc] PlayerSpawn enter: pc=%d team=%d\n", pc, pPlayer->team_no );
 
+	// [tfc.so] Spawn(): buildings only survive a respawn AS an engineer again;
+	// any other class (or a team change, handled separately) wipes them.
+	if ( pc != PC_ENGINEER )
+		pPlayer->TeamFortress_RemoveBuildings();
+
 	// Phase 4: a respawn is always undisguised, unfeigned and not mid-build.
 	pPlayer->is_feigning = 0;
 	pPlayer->is_undercover = 0;
@@ -307,6 +349,8 @@ void TeamFortress_PlayerSpawn( CBasePlayer *pPlayer )
 	pPlayer->is_building = 0;
 	pPlayer->m_iClientBuildState = -1;
 	pPlayer->m_iClientIsFeigning = -1;
+	pPlayer->is_detpacking = 0;
+	pPlayer->m_iClientIsDetpacking = -1;
 	pPlayer->m_iSpyDisguiseClass = 0;
 	pPlayer->m_iSpyDisguiseTeam = 0;
 	pPlayer->m_flSpyDisguiseTime = 0;
@@ -390,6 +434,39 @@ static CBasePlayerWeapon *TF_ActiveWeapon( CBasePlayer *pPlayer )
 	return pPlayer->m_pActiveItem ? (CBasePlayerWeapon *)pPlayer->m_pActiveItem->GetWeaponPtr() : NULL;
 }
 
+extern short g_sModelIndexSaveMe;
+
+// [tfc.so] CBasePlayer::TeamFortress_SaveMe ("saveme"). The shout is rate-limited;
+// the sprite over the caller's head goes to every medic/spy/engineer, any team.
+void CBasePlayer::TeamFortress_SaveMe( void )
+{
+	if ( gpGlobals->time > last_saveme_sound )
+	{
+		const char *pszSample = RANDOM_FLOAT( 0.0f, 1.0f ) < 0.8 ? "speech/saveme1.wav" : "speech/saveme2.wav";
+		EMIT_SOUND_DYN( edict(), CHAN_WEAPON, pszSample, 1.0f, 0.8f, 0, PITCH_NORM );
+		last_saveme_sound = gpGlobals->time + 4.0f;
+	}
+
+	CBaseEntity *pEnt = NULL;
+	while ( ( pEnt = UTIL_FindEntityByClassname( pEnt, "player" ) ) != NULL )
+	{
+		if ( FNullEnt( pEnt->edict() ) )
+			return;
+
+		int pc = pEnt->pev->playerclass;
+		if ( pc != PC_MEDIC && pc != PC_SPY && pc != PC_ENGINEER )
+			continue;
+
+		MESSAGE_BEGIN( MSG_ONE, SVC_TEMPENTITY, NULL, pEnt->edict() );
+			WRITE_BYTE( TE_PLAYERATTACHMENT );
+			WRITE_BYTE( ENTINDEX( edict() ) );
+			WRITE_COORD( 50 );
+			WRITE_SHORT( g_sModelIndexSaveMe );
+			WRITE_SHORT( 40 );
+		MESSAGE_END();
+	}
+}
+
 // [tfc.so] CBasePlayer::UseSpecialSkill ("special" -> "_special"). Scout's
 // detection list, spy disguise and engineer build come with later phases.
 void CBasePlayer::UseSpecialSkill( void )
@@ -442,8 +519,153 @@ void CBasePlayer::TeamFortress_RemoveTimers( void )
 			UTIL_Remove( pTimer );
 	}
 
+	TeamFortress_DropCarriedItems( this );
+
 	ExplodeOldPipebomb( TRUE, TRUE );
+	item_list = 0;
 	TeamFortress_SetSpeed();
+}
+
+// [tfc.so] clamps armour, ammo, grenades and health, then recomputes the armour item bits.
+void CBasePlayer::TeamFortress_CheckClassStats( void )
+{
+	if ( pev->armortype > armor_allowed )
+		pev->armortype = armor_allowed;
+	if ( pev->armorvalue > maxarmor )
+		pev->armorvalue = maxarmor;
+	if ( pev->armortype < 0 )
+		pev->armortype = 0;
+	if ( pev->armorvalue < 0 )
+		pev->armorvalue = 0;
+
+	ammo_shells = Q_max( 0, Q_min( ammo_shells, maxammo_shells ) );
+	ammo_nails = Q_max( 0, Q_min( ammo_nails, maxammo_nails ) );
+	ammo_rockets = Q_max( 0, Q_min( ammo_rockets, maxammo_rockets ) );
+	ammo_cells = Q_max( 0, Q_min( ammo_cells, maxammo_cells ) );
+	ammo_medikit = Q_max( 0, Q_min( ammo_medikit, maxammo_medikit ) );
+	ammo_detpack = Q_max( 0, Q_min( ammo_detpack, maxammo_detpack ) );
+
+	no_grenades_1 = Q_max( 0, Q_min( no_grenades_1, 4 ) );
+	no_grenades_2 = Q_max( 0, Q_min( no_grenades_2, 4 ) );
+
+	// per-type caps: nail and MIRV 2, concussion and caltrop 3
+	static const int iCapTypes[4][2] = { { GR_TYPE_NAIL, 2 }, { GR_TYPE_MIRV, 2 }, { GR_TYPE_CONCUSSION, 3 }, { GR_TYPE_CALTROP, 3 } };
+	for ( int i = 0; i < 4; i++ )
+	{
+		if ( tp_grenades_1 == iCapTypes[i][0] && no_grenades_1 > iCapTypes[i][1] )
+			no_grenades_1 = iCapTypes[i][1];
+		if ( tp_grenades_2 == iCapTypes[i][0] && no_grenades_2 > iCapTypes[i][1] )
+			no_grenades_2 = iCapTypes[i][1];
+	}
+
+	if ( pev->health > pev->max_health && !( items & IT_SUPERHEALTH ) )
+		pev->health = pev->max_health;
+	if ( pev->health < 0 )
+		pev->health = 0;
+
+	items &= ~( IT_ARMOR1 | IT_ARMOR2 | IT_ARMOR3 );
+	if ( pev->armortype >= 0.8f )
+		items |= IT_ARMOR3;
+	else if ( pev->armortype >= 0.6f )
+		items |= IT_ARMOR2;
+	else if ( pev->armortype >= 0.3f )
+		items |= IT_ARMOR1;
+}
+
+void CBasePlayer::TeamFortress_RemoveRockets( void )
+{
+	static const char *szRockets[] = { "tf_rpg_rocket", "tf_ic_rocket" };
+
+	for ( int i = 0; i < 2; i++ )
+	{
+		CBaseEntity *pEnt = NULL;
+		while ( ( pEnt = UTIL_FindEntityByClassname( pEnt, szRockets[i] ) ) != NULL )
+		{
+			if ( pEnt->pev->owner == edict() )
+				pEnt->pev->flags |= FL_KILLME;
+		}
+	}
+}
+
+// [tfc.so] a goal's TFGR_FORCE_RESPAWN: back to a spawn spot alive, no death, no re-equip.
+void CBasePlayer::ForceRespawn( void )
+{
+	forced_spawn = 1;
+
+	MESSAGE_BEGIN( MSG_ALL, SVC_TEMPENTITY );
+		WRITE_BYTE( TE_KILLPLAYERATTACHMENTS );
+		WRITE_BYTE( ENTINDEX( edict() ) );
+	MESSAGE_END();
+
+	if ( is_feigning )
+	{
+		pev->velocity = g_vecZero;
+		TeamFortress_SpyStandUp( this );
+	}
+
+	if ( m_pTank != NULL )
+	{
+		m_pTank->Use( this, this, USE_OFF, 0 );
+		m_pTank = NULL;
+	}
+
+	m_flTimeStepSound = 0;
+	m_iStepLeft = 0;
+	m_flFallVelocity = 0;
+	invincible_finished = 0;
+	invisible_finished = 0;
+	super_damage_finished = 0;
+	radsuit_finished = 0;
+	numflames = 0;
+	m_flConcDuration = 0;
+	m_flConcStartTime = 0;
+	m_flNextSBarUpdateTime = gpGlobals->time + 1.0f;
+
+	// [tfc.so] sets bRemoveGrenade; this tree drops the prime directly
+	if ( tfstate & TFSTATE_GRENPRIMED )
+		TeamFortress_CancelPrimedGrenade( this );
+
+	// only the random-class and aiming bits survive
+	tfstate &= ( TFSTATE_RANDOMPC | TFSTATE_AIMING );
+
+	// [tfc.so] also sends an unknown svc 59 here to exec class scripts; not reproduced
+	if ( pev->playerclass && pev->playerclass != PC_RANDOM && pev->playerclass != lastpc )
+		lastpc = pev->playerclass;
+
+	TeamFortress_SetSpeed();
+	g_pGameRules->GetPlayerSpawnSpot( this );
+	pev->sequence = LookupActivity( ACT_IDLE );
+
+	if ( pev->flags & FL_DUCKING )
+		UTIL_SetSize( pev, VEC_DUCK_HULL_MIN, VEC_DUCK_HULL_MAX );
+	else
+		UTIL_SetSize( pev, VEC_HULL_MIN, VEC_HULL_MAX );
+}
+
+void CBasePlayer::ClientHearVox( const char *pSentence )
+{
+	MESSAGE_BEGIN( MSG_ONE, SVC_STUFFTEXT, NULL, pev );
+		WRITE_STRING( UTIL_VarArgs( pSentence[0] == '#' ? "spk %s\n" : "spk \"%s\"\n", pSentence ) );
+	MESSAGE_END();
+}
+
+// [tfc.so] from CHalfLifeMultiplay::ClientDisconnected: nothing the player owned outlives them.
+void CBasePlayer::CleanupOnPlayerDisconnection( void )
+{
+	TeamFortress_RemoveTimers();
+
+	if ( tfstate & TFSTATE_GRENPRIMED )
+		TeamFortress_CancelPrimedGrenade( this );
+
+	TeamFortress_RemoveLiveGrenades();
+	TeamFortress_RemoveRockets();
+	TeamFortress_RemoveDetpacks();
+
+	no_sentry_message = 1;
+	no_dispenser_message = 1;
+	no_entry_teleporter_message = 1;
+	no_exit_teleporter_message = 1;
+	Engineer_RemoveBuildings();
 }
 
 // Per-frame, from PlayerThink. [tfc.so] CBasePlayer::PreThink: water above the
@@ -469,6 +691,9 @@ BOOL TeamFortress_ClientCommand( CBasePlayer *pPlayer, const char *pcmd )
 		return TRUE;
 
 	if ( TeamFortress_SpyCommand( pPlayer, pcmd ) )
+		return TRUE;
+
+	if ( TeamFortress_DetpackCommand( pPlayer, pcmd ) )
 		return TRUE;
 
 	if ( FStrEq( pcmd, "jointeam" ) )
@@ -501,6 +726,32 @@ BOOL TeamFortress_ClientCommand( CBasePlayer *pPlayer, const char *pcmd )
 		return TRUE;
 	}
 
+	if ( FStrEq( pcmd, "saveme" ) )
+	{
+		pPlayer->TeamFortress_SaveMe();
+		return TRUE;
+	}
+
+	if ( FStrEq( pcmd, "flaginfo" ) )
+	{
+		pPlayer->TeamFortress_DisplayDetectionItems();
+		return TRUE;
+	}
+
+	if ( FStrEq( pcmd, "dropitems" ) )
+	{
+		pPlayer->DropGoalItems();
+		return TRUE;
+	}
+
+	// [tfc.so] an authenticated-admin command; here only the listen-server host may use it
+	if ( FStrEq( pcmd, "adm_ceasefire" ) )
+	{
+		if ( !IS_DEDICATED_SERVER() && ENTINDEX( pPlayer->edict() ) == 1 )
+			Admin_CeaseFire();
+		return TRUE;
+	}
+
 	if ( FStrEq( pcmd, "changeteam" ) )
 	{
 		TeamFortress_ShowVGUIMenu( pPlayer, MENU_TEAM );
@@ -528,54 +779,15 @@ BOOL TeamFortress_ClientCommand( CBasePlayer *pPlayer, const char *pcmd )
 		return TRUE;
 	}
 
-	// Civilian is map-enforced only, never player-chosen -- swallow it quietly.
+	// [tfc.so] only a civilian-only team may pick it
 	if ( FStrEq( pcmd, "civilian" ) )
+	{
+		if ( TeamFortress_TeamIsCivilian( (float)pPlayer->team_no ) )
+			TeamFortress_ChangeClass( pPlayer, PC_CIVILIAN );
 		return TRUE;
+	}
 
 	return FALSE;
-}
-
-static bool TeamFortress_SpotClear( CBaseEntity *pSpot, CBaseEntity *pIgnore )
-{
-	CBaseEntity *pEnt = NULL;
-	while ( ( pEnt = UTIL_FindEntityInSphere( pEnt, pSpot->pev->origin, 96 ) ) != NULL )
-	{
-		if ( pEnt->IsPlayer() && pEnt != pIgnore )
-			return false;
-	}
-	return true;
-}
-
-// info_player_teamspawn for the player's team, or NULL to fall back to DM/start spawns.
-edict_t *TeamFortress_SelectTeamSpawnPoint( CBasePlayer *pPlayer )
-{
-	CBaseEntity *pSpot = NULL;
-	CBaseEntity *pChoices[64];
-	CBaseEntity *pAnyTeam = NULL;
-	int nChoices = 0;
-
-	while ( ( pSpot = UTIL_FindEntityByClassname( pSpot, "info_player_teamspawn" ) ) != NULL )
-	{
-		if ( !( (CTFSpawn *)pSpot )->CheckTeam( pPlayer->team_no ) || pSpot->goal_state == TFGS_REMOVED )
-			continue;
-		if ( pSpot->pev->origin == g_vecZero )
-			continue;
-		if ( cb_prematch_time <= gpGlobals->time && !ActivationSucceeded( pSpot, pPlayer, NULL ) )
-			continue;
-
-		pAnyTeam = pSpot;
-		if ( TeamFortress_SpotClear( pSpot, pPlayer ) && nChoices < (int)ARRAYSIZE( pChoices ) )
-			pChoices[nChoices++] = pSpot;
-	}
-
-	if ( nChoices > 0 )
-		return pChoices[RANDOM_LONG( 0, nChoices - 1 )]->edict();
-
-	// All matching spawns are blocked: take one anyway, not a possibly enemy-side DM spawn.
-	if ( pAnyTeam )
-		return pAnyTeam->edict();
-
-	return NULL;
 }
 
 // tf_wpn_* drain ammo_shells etc but the HUD reserve reads m_rgAmmo[]: mirror them

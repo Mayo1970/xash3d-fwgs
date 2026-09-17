@@ -113,9 +113,7 @@ static void TF_PlayFX( edict_t *ed, unsigned short us, const Vector &org )
 	PLAYBACK_EVENT_FULL( FEV_GLOBAL, ed, us, 0.0f, (float *)&o, (float *)&o, 0.0f, 0.0f, 0, 0, 0, 0 );
 }
 
-//=========================================================
 // Throw geometry + prime timing.
-//=========================================================
 // [tfc.so] CTFPrimeGrenade::Throw, draw order kept: right jitter, then up jitter.
 static void TF_ThrowVectors( CBasePlayer *pOwner, Vector &vSrc, Vector &vVel )
 {
@@ -128,9 +126,7 @@ static void TF_ThrowVectors( CBasePlayer *pOwner, Vector &vSrc, Vector &vVel )
 	vVel = gpGlobals->v_forward * TF_THROW_FWD + gpGlobals->v_up * flUp + gpGlobals->v_right * flRight;
 }
 
-//=========================================================
 // Player-effect helpers.
-//=========================================================
 static bool TF_IsEnemyOf( CBaseEntity *pTarget, CBaseEntity *pOwner )
 {
 	if ( !pOwner || pTarget == pOwner )
@@ -193,10 +189,8 @@ static void TF_ApplyBurn( CBasePlayer *pl, entvars_t *pevAttacker )
 	pl->m_hTFEffectAttacker = pevAttacker ? CBaseEntity::Instance( pevAttacker ) : NULL;
 }
 
-//=========================================================
 // Collect living players in a sphere. Two-pass on purpose: killing a victim
 // mid-walk would corrupt UTIL_FindEntityInSphere's resume pointer.
-//=========================================================
 static int TF_GatherPlayers( edict_t *pGren, const Vector &org, float radius,
                              CBaseEntity *pOwner, bool enemiesOnly, bool needLOS,
                              CBaseEntity **out, int maxOut )
@@ -216,10 +210,8 @@ static int TF_GatherPlayers( edict_t *pGren, const Vector &org, float radius,
 	return n;
 }
 
-//=========================================================
 // CTFGrenNail -- one nail from a nail grenade. The client draws its own nails
 // from tf_nailgren.sc, so EF_NODRAW keeps this off the wire (client.cpp:1309).
-//=========================================================
 class CTFGrenNail : public CBaseEntity
 {
 public:
@@ -290,10 +282,8 @@ void CTFGrenNail::NailTouch( CBaseEntity *pOther )
 	UTIL_Remove( this );
 }
 
-//=========================================================
 // CTFTossGrenade -- base for every thrown grenade. The tumble think is a copy
 // of stock CGrenade::TumbleThink; at the fuse it calls the VIRTUAL Detonate2().
-//=========================================================
 class CTFTossGrenade : public CGrenade
 {
 public:
@@ -406,6 +396,10 @@ void CTFTossGrenade::TossThink( void )
 
 	if ( pev->dmgtime <= gpGlobals->time )
 	{
+		// [tfc.so] every hand grenade's Explode checks this first; bomblets do not
+		if ( !FClassnameIs( pev, "tf_weapon_mirvbomblet" ) && TeamFortress_InNoGrenadeZone( this ) )
+			return;
+
 		Detonate2();          // virtual -> per-type payload
 		return;
 	}
@@ -544,9 +538,7 @@ void CTFTossGrenade::NapalmField( void )
 	pev->nextthink = gpGlobals->time + TF_NAPALM_TICK;
 }
 
-//=========================================================
 // Type subclasses -- classname carries the type, Detonate2 carries the payload.
-//=========================================================
 #define TF_GREN_SUBCLASS( CLS, NAME, MDL, FX ) \
 	class CLS : public CTFTossGrenade { public: \
 		const char *GrenModel( void ) { return MDL; } \
@@ -769,11 +761,9 @@ void CTFCaltropGrenade::Detonate2( void )
 	UTIL_Remove( this );
 }
 
-//=========================================================
 // CTFCaltrop -- one scattered caltrop. Slows the first enemy to step on it.
-//=========================================================
-// The mid-left "legs hurt" icon, up for as long as leg_damage is. Same sprite as
-// the bottom-left damage tile; the name is TFC's own (tfc/sprites/hud.txt).
+
+// The mid-left "legs hurt" icon, up while leg_damage is; sprite name from tfc/sprites/hud.txt.
 static void TF_SetLegIcon( CBasePlayer *pl, BOOL bOn )
 {
 	MESSAGE_BEGIN( MSG_ONE, gmsgStatusIcon, NULL, pl->edict() );
@@ -850,9 +840,7 @@ void CTFCaltrop::ShardExpire( void )
 	UTIL_Remove( this );
 }
 
-//=========================================================
 // Per-class grenade loadout, straight off tf_defs.h's PC_*_GRENADE_* defines.
-//=========================================================
 struct tf_gren_row_t { int type1, init1, type2, init2; };
 
 #define TFGRENROW( P ) { PC_##P##_GRENADE_TYPE_1, PC_##P##_GRENADE_INIT_1, \
@@ -889,10 +877,8 @@ static const char *TF_GrenClassname( int grtype )
 	}
 }
 
-//=========================================================
 // HUD count. gmsgGrenades ("SecAmmoVal") is a per-index 2-byte message
 // (index, value) -- MsgFunc_SecAmmoVal, cl_dll/ammo_secondary.cpp.
-//=========================================================
 void TeamFortress_SendGrenadeCounts( CBasePlayer *pPlayer )
 {
 	MESSAGE_BEGIN( MSG_ONE, gmsgGrenades, NULL, pPlayer->edict() );
@@ -928,9 +914,13 @@ static void TeamFortress_ClearPrime( CBasePlayer *pPlayer )
 	TeamFortress_SetGrenadeIcon( pPlayer, FALSE );
 }
 
-//=========================================================
+// A goal took the stock of the primed grenade away: drop the prime, throw nothing.
+void TeamFortress_CancelPrimedGrenade( CBasePlayer *pPlayer )
+{
+	TeamFortress_ClearPrime( pPlayer );
+}
+
 // Remove this player's live thrown grenades (class change / respawn).
-//=========================================================
 void CBasePlayer::TeamFortress_RemoveLiveGrenades( void )
 {
 	static const char *kClasses[] =
@@ -953,9 +943,7 @@ void CBasePlayer::TeamFortress_RemoveLiveGrenades( void )
 	}
 }
 
-//=========================================================
 // Spawn: seed the class grenade counts, reset primed + lingering effect state.
-//=========================================================
 void TeamFortress_SetupGrenades( CBasePlayer *pPlayer )
 {
 	int pc = pPlayer->pev->playerclass;
@@ -1041,9 +1029,7 @@ static void TF_DeployCaltropCan( CBasePlayer *pPlayer )
 	                            vSrc, vVel, (float)GR_CALTROP_PRIME );
 }
 
-//=========================================================
 // Prime / throw.
-//=========================================================
 void CBasePlayer::TeamFortress_PrimeGrenade( int iSlot )
 {
 	if ( pev->deadflag != DEAD_NO )
@@ -1132,9 +1118,7 @@ void CBasePlayer::TeamFortress_ThrowPrimedGrenade( void )
 	TeamFortress_SendGrenadeCounts( this );
 }
 
-//=========================================================
 // Per-frame: prime auto-detonate + lingering effect upkeep. From PlayerThink.
-//=========================================================
 void TeamFortress_GrenadeThink( CBasePlayer *pPlayer )
 {
 	float now = gpGlobals->time;
@@ -1216,10 +1200,8 @@ void TeamFortress_GrenadeThink( CBasePlayer *pPlayer )
 	}
 }
 
-//=========================================================
 // Command dispatch -- from TeamFortress_ClientCommand (tf_client.cpp). The
 // engine forwards the unknown +gren1/-gren1/+gren2/-gren2 console commands.
-//=========================================================
 BOOL TeamFortress_GrenadeCommand( CBasePlayer *pPlayer, const char *pcmd )
 {
 	if ( FStrEq( pcmd, "+gren1" ) )

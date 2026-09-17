@@ -1,9 +1,5 @@
-/***
-*
-*	TFC-6 Phase 4 -- Engineer buildings (sentry gun, dispenser) and the spanner.
-*	Every constant here is read from the retail tfc/dlls/tfc.so unless marked.
-*
-****/
+// TFC-6 Phase 4 -- Engineer buildings (sentry gun, dispenser) and the spanner.
+// Every constant here is read from the retail tfc/dlls/tfc.so unless marked.
 
 #include "extdll.h"
 #include "util.h"
@@ -16,6 +12,7 @@
 #include "soundent.h"
 #include "decals.h"
 #include "game.h"
+#include "shake.h"
 
 #define TF_MIN( a, b ) ( ( a ) < ( b ) ? ( a ) : ( b ) )
 #define TF_MAX( a, b ) ( ( a ) > ( b ) ? ( a ) : ( b ) )
@@ -58,12 +55,11 @@ extern int gmsgBuildState;
 #define TF_SENTRY_AIM_TOL     10.0f   // goal/current angle gap that still lets it fire
 #define TF_SENTRY_CHECK_WAIT  3.0f
 #define TF_SENTRY_FALL_DIST   24      // CheckBelowBuilding drop tolerance
-// [tfc.so] CTFSentrygunBase::Finished puts the gun 21.2 u above its base plate.
-// sentry*.mdl is authored around that pivot, so without the lift the model is
-// buried to the waist.
+// [tfc.so] CTFSentrygunBase::Finished lifts the gun 21.2 u above its base plate;
+// sentry*.mdl is authored around that pivot, so without it the model is buried.
 #define TF_SENTRY_LIFT        21.2f
 
-// Spanner refill/repair, in metal [tfc.so].
+// Spanner repair costs 1 metal per 5 hp; sentry reloads come from the player's own ammo [tfc.so].
 #define TF_METAL_PER_HEALTH   5
 #define TF_SENTRY_RELOAD_SHELLS   40
 #define TF_SENTRY_RELOAD_ROCKETS  20
@@ -104,9 +100,7 @@ enum tfturret_anim_e
 	TURRET_ANIM_SCAN = 2,
 };
 
-//=========================================================
 // Shared helpers
-//=========================================================
 
 // Declared in tf_defs.h but never defined in this tree.
 void teamsprint( int tno, CBaseEntity *ignore, int msg_dest, const char *st,
@@ -121,18 +115,29 @@ void teamsprint( int tno, CBaseEntity *ignore, int msg_dest, const char *st,
 	}
 }
 
-// Declared in player.h, never defined. TFC ammo lives in the scalar ammo_*
-// fields; TeamFortress_SyncAmmo mirrors them into m_rgAmmo for the HUD.
+// Adds up to the cap and returns what was really added.
+static int TF_GiveOneAmmo( int &iAmmo, int iAdd, int iMax )
+{
+	iAmmo += iAdd;
+	if ( iAmmo > iMax )
+	{
+		iAdd -= iAmmo - iMax;
+		iAmmo = iMax;
+	}
+	return iAdd;
+}
+
+// TFC ammo lives in the scalar ammo_* fields (TeamFortress_SyncAmmo feeds the HUD).
+// [tfc.so] negative amounts take ammo away (goals do this); CheckClassStats floors at 0.
 BOOL CBasePlayer::GiveTFAmmo( int shells, int nails, int rockets, int cells )
 {
-	if ( shells <= 0 && nails <= 0 && rockets <= 0 && cells <= 0 )
-		return FALSE;
+	int iTotal = 0;
 
-	ammo_shells  = TF_MIN( ammo_shells + shells,   maxammo_shells );
-	ammo_nails   = TF_MIN( ammo_nails + nails,     maxammo_nails );
-	ammo_rockets = TF_MIN( ammo_rockets + rockets, maxammo_rockets );
-	ammo_cells   = TF_MIN( ammo_cells + cells,     maxammo_cells );
-	return TRUE;
+	iTotal |= TF_GiveOneAmmo( ammo_shells, shells, maxammo_shells );
+	iTotal |= TF_GiveOneAmmo( ammo_nails, nails, maxammo_nails );
+	iTotal |= TF_GiveOneAmmo( ammo_rockets, rockets, maxammo_rockets );
+	iTotal |= TF_GiveOneAmmo( ammo_cells, cells, maxammo_cells );
+	return iTotal != 0;
 }
 
 // [tfc.so] a hit building flashes a team-coloured glow shell that fades at
@@ -168,22 +173,22 @@ static void TF_BuildingFadeGlow( CBaseEntity *pEnt )
 	}
 }
 
-// [tfc.so] CBaseMonster::TakeDamage: an ally who is not the victim cannot hurt
-// it at all while mp_teamplay bit 2 is set (retail listenserver.cfg sets 21).
-// DMG_BLAST and self-damage always go through. Note this is mp_teamplay, NOT
-// mp_friendlyfire -- that cvar has no say over buildings.
+// [tfc.so disasm] DMG_BLAST is gated on TEAMPLAY_NOEXPLOSIVE, not let through free;
+// retail's mp_teamplay 21 sets that bit too, so allies' splash must be refused as well.
 static BOOL TF_BuildingCanTakeDamage( CBaseEntity *pBuilding, entvars_t *pevAttacker, int bitsDamageType )
 {
 	if ( !pevAttacker || !( pevAttacker->flags & FL_CLIENT ) )
-		return TRUE;
-	if ( bitsDamageType & DMG_BLAST )
 		return TRUE;
 
 	CBaseEntity *pAttacker = CBaseEntity::Instance( pevAttacker );
 	if ( !pAttacker || pAttacker == pBuilding || !pBuilding->IsAlly( pAttacker ) )
 		return TRUE;
 
-	return ( (int)gpGlobals->teamplay & 4 ) ? FALSE : TRUE;
+	int iTeamplay = (int)gpGlobals->teamplay;
+	if ( bitsDamageType & DMG_BLAST )
+		return ( iTeamplay & TEAMPLAY_NOEXPLOSIVE ) ? FALSE : TRUE;
+
+	return ( iTeamplay & TEAMPLAY_NODIRECT ) ? FALSE : TRUE;
 }
 
 static BOOL TF_IsEngineer( CBasePlayer *pPlayer )
@@ -209,9 +214,8 @@ void CBaseEntity::CheckBelowBuilding( int iDist )
 	}
 }
 
-// [tfc.so] The spot must not be inside anything, and the builder must have a
-// clear path to it. NOT a hull-fit test: round 1 traced a human hull centred on
-// the floor, whose bottom is 36 u underground, so it always read "no room".
+// [tfc.so] the spot must be empty and reachable from the builder. NOT a hull-fit
+// test: a hull centred on the floor starts 36 u underground and always fails.
 int CBaseEntity::CheckArea( CBaseEntity *pIgnore )
 {
 	CBaseEntity *pArea = NULL;
@@ -239,9 +243,8 @@ int CBaseEntity::CheckArea( CBaseEntity *pIgnore )
 	if ( pIgnore->pev->flags & FL_DUCKING )
 		vecStart.z += 18;
 
-	// ignore_monsters, and the ignored edict is the BUILDING, not the builder:
-	// the building is solid and sits exactly on vecStart, so anything else
-	// reports fStartSolid and every spot reads "no room".
+	// ignore the BUILDING, not the builder: it is solid and sits on vecStart,
+	// so anything else reports fStartSolid everywhere.
 	UTIL_TraceHull( vecStart, pIgnore->pev->origin + pIgnore->pev->view_ofs,
 	                ignore_monsters, human_hull, ENT( pev ), &tr );
 
@@ -251,11 +254,8 @@ int CBaseEntity::CheckArea( CBaseEntity *pIgnore )
 	return CAREA_CLEAR;
 }
 
-//=========================================================
-// Sentry gun base -- the legs. base.mdl is 21.6 u tall and sentry*.mdl draws
-// only the gun body from its own origin up, so the two really are separate
-// entities: dropping the base leaves the gun standing on nothing.
-//=========================================================
+// Sentry gun base -- the legs. base.mdl is 21.6 u tall and sentry*.mdl draws only
+// the gun body, so the base must stay a separate entity.
 
 class CTFSentrygunBase : public CBaseAnimating
 {
@@ -293,9 +293,7 @@ int CTFSentrygunBase::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacke
 	return pGun->TakeDamage( pevInflictor, pevAttacker, flDamage, bitsDamageType );
 }
 
-//=========================================================
 // Sentry gun
-//=========================================================
 
 class CTFSentrygun : public CBaseMonster
 {
@@ -333,7 +331,6 @@ public:
 	float m_fTurnRate;
 	float m_flNextCheck;
 	float m_flNextRocket;
-	float m_flNextUseTime;
 	Vector m_vecCurAngles;
 	Vector m_vecGoalAngles;
 	int m_iShellSprite;
@@ -379,7 +376,6 @@ void CTFSentrygun::Spawn( void )
 	m_vecGoalAngles  = g_vecZero;
 	m_hEnemy         = NULL;
 	m_flNextRocket   = 0;
-	m_flNextUseTime  = 0;
 	m_bTurningRight  = 0;
 
 	maxammo_shells  = TF_SENTRY_MAXSHELLS;
@@ -435,6 +431,7 @@ void CTFSentrygun::Finished( void )
 		pBase->real_owner = real_owner;
 		pBase->team_no = team_no;
 		pBase->pev->team = pev->team;
+		pBase->pev->colormap = pev->colormap;   // legs are a separate entity, same team remap
 		pBase->m_pOtherSection = this;
 		m_pOtherSection = pBase;
 	}
@@ -504,9 +501,8 @@ BOOL CTFSentrygun::ValidTarget( CBaseEntity *pTarget )
 
 	if ( gpGlobals->teamplay && team_no )
 	{
-		// mp_friendlyfire lifting the ally check is a TEST AID, not TFC parity:
-		// nobody else can join a PS3-hosted game yet (TFC-6 half B), so it is
-		// the only way to see the gun acquire and fire on hardware.
+		// TEST AID, not parity: mp_friendlyfire lifts the ally check so a lone
+		// PS3 host (TFC-6 half B) can see the gun fire.
 		if ( IsAlly( pTarget ) && !friendlyfire.value )
 			return FALSE;
 
@@ -744,9 +740,8 @@ void CTFSentrygun::Fire( void )
 
 	if ( m_iLevel == 3 && ammo_rockets > 0 && gpGlobals->time > m_flNextRocket )
 	{
-		// not the model attachment: the rocket's owner is the engineer, so
-		// SV_ClipToLinks does not skip the sentry and a muzzle inside its own
-		// hull would detonate on it
+		// not the attachment: the rocket's owner is the engineer, so SV_ClipToLinks
+		// does not skip the sentry and a muzzle inside its hull would hit it
 		vecSrc = pev->origin + pev->view_ofs + vecDir * TF_SENTRY_MUZZLE_FWD;
 		vecAng = UTIL_VecToAngles( vecDir );
 		vecAng.x = -vecAng.x;
@@ -802,52 +797,49 @@ void CTFSentrygun::Fire( void )
 	}
 }
 
-// Spanner hit: repair, then reload, then upgrade -- in that order [tfc.so].
+// [tfc.so] Spanner hit: upgrade if metal allows, else repair, else refill shells
+// and rockets from the player's own ammo. No per-hit gate beyond the swing rate.
 BOOL CTFSentrygun::EngineerUse( CBasePlayer *pPlayer )
 {
 	if ( !pPlayer || !IsAlly( pPlayer ) || !m_iLevel )
 		return FALSE;
 
-	if ( gpGlobals->time < m_flNextUseTime )
-		return TRUE;
-	m_flNextUseTime = gpGlobals->time + 0.5f;
-
-	int iMetal = pPlayer->ammo_cells;
-
-	if ( pev->health < pev->max_health && iMetal > 0 )
-	{
-		int iSpend = TF_MIN( iMetal, (int)( pev->max_health - pev->health ) * TF_METAL_PER_HEALTH );
-		pev->health = TF_MIN( pev->max_health, pev->health + iSpend / TF_METAL_PER_HEALTH );
-		pPlayer->ammo_cells -= iSpend;
-		ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, "#Sentry_repair" );
-		EMIT_SOUND_DYN( ENT( pev ), CHAN_ITEM, TF_SND_TURRSET, 1.0f, 0.8f, 0, PITCH_NORM );
-		return TRUE;
-	}
-
-	if ( ammo_shells < maxammo_shells && iMetal >= TF_SENTRY_RELOAD_SHELLS )
-	{
-		ammo_shells = TF_MIN( maxammo_shells, ammo_shells + TF_SENTRY_RELOAD_SHELLS );
-		pPlayer->ammo_cells -= TF_SENTRY_RELOAD_SHELLS;
-		ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, "#Sentry_inshells" );
-		EMIT_SOUND_DYN( ENT( pev ), CHAN_ITEM, TF_SND_AMMOPICKUP, 1.0f, 0.8f, 0, PITCH_NORM );
-		return TRUE;
-	}
-
-	if ( m_iLevel == 3 && ammo_rockets < maxammo_rockets && iMetal >= TF_SENTRY_RELOAD_ROCKETS * 2 )
-	{
-		ammo_rockets = TF_MIN( maxammo_rockets, ammo_rockets + TF_SENTRY_RELOAD_ROCKETS );
-		pPlayer->ammo_cells -= TF_SENTRY_RELOAD_ROCKETS * 2;
-		ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, "#Sentry_inrockets" );
-		EMIT_SOUND_DYN( ENT( pev ), CHAN_ITEM, TF_SND_AMMOPICKUP, 1.0f, 0.8f, 0, PITCH_NORM );
-		return TRUE;
-	}
-
-	if ( m_iLevel < 3 && iMetal >= BUILD_COST_SENTRYGUN )
+	if ( m_iLevel < 3 && pPlayer->ammo_cells >= BUILD_COST_SENTRYGUN )
 	{
 		pPlayer->ammo_cells -= BUILD_COST_SENTRYGUN;
+		ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, "#Sentry_upgrade", UTIL_dtos1( m_iLevel + 1 ) );
 		Upgrade();
-		ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, "#Sentry_upgrade" );
 		return TRUE;
+	}
+
+	if ( pev->health < pev->max_health )
+	{
+		int iPoints = (int)ceil( ( pev->max_health - pev->health ) / TF_METAL_PER_HEALTH );
+		iPoints = TF_MIN( iPoints, pPlayer->ammo_cells );
+
+		if ( iPoints > 0 )
+		{
+			pPlayer->ammo_cells -= iPoints;
+			pev->health = TF_MIN( pev->max_health, pev->health + iPoints * TF_METAL_PER_HEALTH );
+			ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, "#Sentry_repair" );
+			return TRUE;
+		}
+	}
+
+	if ( ammo_shells < maxammo_shells && pPlayer->ammo_shells > 0 )
+	{
+		int iGive = TF_MIN( TF_MIN( pPlayer->ammo_shells, TF_SENTRY_RELOAD_SHELLS ), maxammo_shells - ammo_shells );
+		pPlayer->ammo_shells -= iGive;
+		ammo_shells += iGive;
+		ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, "#Sentry_inshells" );
+	}
+
+	if ( ammo_rockets < maxammo_rockets && m_iLevel == 3 && pPlayer->ammo_rockets > 0 )
+	{
+		int iGive = TF_MIN( TF_MIN( pPlayer->ammo_rockets, TF_SENTRY_RELOAD_ROCKETS ), maxammo_rockets - ammo_rockets );
+		pPlayer->ammo_rockets -= iGive;
+		ammo_rockets += iGive;
+		ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, "#Sentry_inrockets" );
 	}
 
 	return TRUE;
@@ -931,9 +923,7 @@ void CTFSentrygun::Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int 
 	UTIL_Remove( this );
 }
 
-//=========================================================
 // Dispenser
-//=========================================================
 
 class CTFDispenser : public CBaseAnimating
 {
@@ -1234,9 +1224,885 @@ void CTFDispenser::Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int 
 	UTIL_Remove( this );
 }
 
-//=========================================================
+// Teleporters [tfc.so]. FX are tf_buildingevent.sc nodes the client keeps alive.
+
+#define TF_MDL_TELEPORTER     "models/teleporter.mdl"
+#define TF_TELE_HEALTH        125.0f
+#define TF_TELE_THINK         0.05f
+#define TF_TELE_FADE          0.25f   // fade out / fade in, x m_flDamageDelay
+#define TF_TELE_RECHARGE      10.0f
+#define TF_TELE_ENTRY_WAIT    10.5f
+#define TF_TELE_EXIT_Z        49.0f
+#define TF_TELE_GLOW_TIME     12.0f
+#define TF_TELE_DISMANTLE     62      // metal back from a dismantle
+#define TF_TELE_DISMANTLE_DIST 128.0f
+
+// m_iState
+#define TELE_STATE_INIT       0
+#define TELE_STATE_IDLE       1       // built, no partner
+#define TELE_STATE_READY      2
+#define TELE_STATE_SENDING    3       // entrance: someone stepped on
+#define TELE_STATE_RECEIVING  4       // exit: fading the player in
+#define TELE_STATE_ARRIVED    5
+#define TELE_STATE_RECHARGE   6
+
+// m_iBuildingEventState / event iparam1 bits (cl_dll/ev_tfc.h)
+#define TELE_EV_SPARK         1
+#define TELE_EV_SMOKE         2
+#define TELE_EV_ENTRY         4
+#define TELE_EV_EXIT          8
+#define TELE_EV_READY         32
+#define TELE_EV_IN            64
+#define TELE_EV_OUT           128
+#define TELE_EV_MOVED         0x100
+#define TELE_EV_PARTICLES     0x200
+#define TELE_EV_REMOVE        0x400
+
+extern int gmsgSpecFade;
+extern int gmsgResetFade;
+
+static Vector TF_TeleTeamColor( int iTeam )
+{
+	switch ( iTeam )
+	{
+	case 1:  return Vector( 0, 0, 255 );
+	case 2:  return Vector( 255, 0, 0 );
+	case 3:  return Vector( 255, 255, 0 );
+	case 4:  return Vector( 0, 255, 0 );
+	default: return g_vecZero;
+	}
+}
+
+static void TF_BuildingEvent( CBaseEntity *pEnt, int iBits, int iTeam, int bOn )
+{
+	PLAYBACK_EVENT_FULL( FEV_RELIABLE | FEV_GLOBAL, pEnt->edict(), pEnt->m_usBuildingEvent, 0,
+	                     pEnt->pev->origin, g_vecZero, 0, 0, iBits, iTeam, bOn, 0 );
+}
+
+// [tfc.so] sparks under 66% health, smoke too under 33%
+void DoDamageEffects( entvars_t *pevBuilding, float flSpark, float flSmoke )
+{
+	CBaseEntity *pEnt = CBaseEntity::Instance( pevBuilding );
+	int &bits = pEnt->m_iBuildingEventState;
+
+	if ( pevBuilding->health < flSpark )
+	{
+		if ( !( bits & TELE_EV_SPARK ) )
+		{
+			TF_BuildingEvent( pEnt, TELE_EV_SPARK, pEnt->team_no, 1 );
+			bits |= TELE_EV_SPARK;
+		}
+
+		if ( pevBuilding->health < flSmoke )
+		{
+			if ( !( bits & TELE_EV_SMOKE ) )
+			{
+				TF_BuildingEvent( pEnt, TELE_EV_SMOKE, pEnt->team_no, 1 );
+				bits |= TELE_EV_SMOKE;
+			}
+			return;
+		}
+	}
+	else if ( bits & TELE_EV_SPARK )
+	{
+		TF_BuildingEvent( pEnt, TELE_EV_SPARK, 0, 0 );
+		bits &= ~TELE_EV_SPARK;
+	}
+
+	if ( bits & TELE_EV_SMOKE )
+	{
+		TF_BuildingEvent( pEnt, TELE_EV_SMOKE, 0, 0 );
+		bits &= ~TELE_EV_SMOKE;
+	}
+}
+
+// [tfc.so] an invisible trigger at the exit that kills whoever stands there
+void CTelefragDeath::Spawn( void )
+{
+	pev->movetype = MOVETYPE_NONE;
+	pev->solid = SOLID_TRIGGER;
+	pev->effects = EF_NODRAW;
+	pev->angles = g_vecZero;
+	pev->classname = MAKE_STRING( "teledeath" );
+
+	CBaseEntity *pOwner = pev->owner ? CBaseEntity::Instance( pev->owner ) : NULL;
+	if ( !pOwner )
+		return;
+
+	UTIL_SetSize( pev, pOwner->pev->mins - Vector( 4, 4, 4 ), pOwner->pev->maxs + Vector( 4, 4, 4 ) );
+	SetTouch( &CTelefragDeath::DeathTouch );
+	SetThink( &CBaseEntity::SUB_Remove );
+	pev->nextthink = gpGlobals->time + 0.2f;
+	gpGlobals->force_retouch = 2;
+}
+
+void CTelefragDeath::DeathTouch( CBaseEntity *pOther )
+{
+	CBaseEntity *pOwner = pev->owner ? CBaseEntity::Instance( pev->owner ) : NULL;
+
+	if ( !pOwner || pOther == pOwner || pOther == (CBaseEntity *)m_hTeleporter )
+		return;
+
+	if ( pOther->IsPlayer() && ( (CBasePlayer *)pOther )->invincible_finished > gpGlobals->time )
+	{
+		// [tfc.so] an invincible target telefrags the traveller instead
+		deathtype = MAKE_STRING( "teledeath2" );
+		pOwner->TakeDamage( pev, pev, 5000, DMG_ALWAYSGIB );
+		return;
+	}
+
+	if ( pOther->pev->takedamage != DAMAGE_NO )
+	{
+		deathtype = MAKE_STRING( "teledeath" );
+		pOther->TakeDamage( pev, pev, 5000, DMG_ALWAYSGIB );
+	}
+
+	if ( FClassnameIs( pOther->pev, "detpack" ) )
+	{
+		CBaseEntity *pDetOwner = pOther->pev->owner ? CBaseEntity::Instance( pOther->pev->owner ) : NULL;
+		UTIL_ClientPrintAll( HUD_PRINTNOTIFY, "#Detpack_telefragged",
+		                     pDetOwner ? STRING( pDetOwner->pev->netname ) : "",
+		                     STRING( pOwner->pev->netname ) );
+		pOther->pev->solid = SOLID_NOT;
+		pOther->SetTouch( NULL );
+		UTIL_Remove( pOther );
+	}
+}
+
+class CTFTeleporter : public CBaseAnimating
+{
+public:
+	void Spawn( void );
+	void Precache( void );
+	int Classify( void ) { return CLASS_MACHINE; }
+	int BloodColor( void ) { return DONT_BLEED; }
+	int TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, float flDamage, int bitsDamageType );
+	void Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int iGib );
+	BOOL EngineerUse( CBasePlayer *pPlayer );
+
+	void EXPORT BuildThink( void );
+	void EXPORT TeleporterThink( void );
+	void EXPORT TeleporterTouch( CBaseEntity *pOther );
+	void EXPORT TeleporterExplode( void );
+
+	void Finished( void );
+	void Detonate( void );
+	void Dismantle( CBasePlayer *pOwner );
+	CTFTeleporter *FindMatch( void );
+	void SetTeleporterRings( int iState );
+	void SetTeleporterParticles( int iState );
+	void TeleporterKilled( void );
+	void StopPlayer( CBasePlayer *pPlayer, const char *pszMsg );
+
+	BOOL IsEntrance( void ) { return m_iType == BUILD_TELEPORTER_ENTRANCE; }
+	CBasePlayer *Traveller( void ) { return (CBasePlayer *)(CBaseEntity *)m_hPlayer; }
+
+	EHANDLE m_hPlayer;
+	int m_iType;
+	int m_iState;
+	int m_iDestroyed;
+	int m_iShardIndex;
+	float m_flMyNextThink;
+	float m_flDamageDelay;
+	BOOL m_bBuilt;
+};
+
+LINK_ENTITY_TO_CLASS( building_teleporter, CTFTeleporter )
+
+void CTFTeleporter::Precache( void )
+{
+	PRECACHE_MODEL( TF_MDL_TELEPORTER );
+	PRECACHE_SOUND( "misc/teleport_out.wav" );
+	PRECACHE_SOUND( "misc/teleport_in.wav" );
+	PRECACHE_SOUND( "misc/teleport_ready.wav" );
+	PRECACHE_SOUND( TF_SND_TURRSET );
+	PRECACHE_MODEL( TF_SPR_SHELL );
+	PRECACHE_MODEL( "sprites/particle.spr" );
+	m_iShardIndex = PRECACHE_MODEL( TF_MDL_COMPGIBS );
+	m_usBuildingEvent = PRECACHE_EVENT( 1, "events/misc/tf_buildingevent.sc" );
+}
+
+void CTFTeleporter::Spawn( void )
+{
+	Precache();
+
+	pev->classname  = MAKE_STRING( "building_teleporter" );
+	deathtype       = MAKE_STRING( "teleporter" );
+	pev->solid      = SOLID_BBOX;
+	pev->movetype   = MOVETYPE_TOSS;
+	pev->flags     &= ~FL_ONGROUND;
+	pev->velocity   = Vector( 0, 0, 8 );
+	pev->max_health = TF_TELE_HEALTH;
+	pev->health     = pev->max_health;
+	pev->takedamage = DAMAGE_NO;
+	pev->flags     |= FL_MONSTER;
+	pev->angles.x   = 0;
+	pev->angles.z   = 0;
+	m_iDestroyed    = 0;
+
+	SET_MODEL( ENT( pev ), TF_MDL_TELEPORTER );
+	UTIL_SetSize( pev, Vector( -16, -16, 0 ), Vector( 16, 16, 12 ) );
+
+	SetThink( &CTFTeleporter::BuildThink );
+	pev->nextthink = gpGlobals->time + TF_SENTRY_THINK;
+}
+
+void CTFTeleporter::BuildThink( void )
+{
+	CheckBelowBuilding( TF_SENTRY_FALL_DIST );
+	pev->nextthink = gpGlobals->time + TF_SENTRY_THINK;
+}
+
+// The metal is taken by Timer_FinishedBuilding, as for the other buildings.
+void CTFTeleporter::Finished( void )
+{
+	CBasePlayer *pOwner = (CBasePlayer *)( (CBaseEntity *)real_owner );
+	BOOL bEntrance = IsEntrance();
+	const char *pszFinished = bEntrance ? "#Teleporter_Entrance_Finished" : "#Teleporter_Exit_Finished";
+	const char *pszBuilt = bEntrance ? "#Teleporter_Entrance_Built" : "#Teleporter_Exit_Built";
+
+	m_bBuilt = TRUE;
+
+	if ( pOwner && pOwner->IsPlayer() )
+	{
+		if ( bEntrance )
+			pOwner->has_entry_teleporter = 1;
+		else
+			pOwner->has_exit_teleporter = 1;
+
+		ClientPrint( pOwner->pev, HUD_PRINTNOTIFY, pszFinished );
+		teamsprint( team_no, pOwner, HUD_PRINTCENTER, pszBuilt, STRING( pOwner->pev->netname ), NULL, NULL );
+		UTIL_LogPrintf( "\"%s<%i><%s><%s>\" triggered \"%s\"\n", STRING( pOwner->pev->netname ),
+		                GETPLAYERUSERID( pOwner->edict() ), GETPLAYERAUTHID( pOwner->edict() ),
+		                GetTeamName( pOwner->team_no ), pszFinished + 1 );
+	}
+
+	pev->takedamage = DAMAGE_AIM;
+	m_iState = TELE_STATE_IDLE;
+	pev->movetype = MOVETYPE_TOSS;
+	pev->velocity = Vector( 0, 0, 8 );
+	pev->flags &= ~FL_ONGROUND;
+	m_vOldOrigin = pev->origin;
+
+	SetTouch( &CTFTeleporter::TeleporterTouch );
+	SetThink( &CTFTeleporter::TeleporterThink );
+	pev->nextthink = gpGlobals->time + TF_SENTRY_THINK;
+
+	EMIT_SOUND_DYN( ENT( pev ), CHAN_WEAPON, TF_SND_TURRSET, 1.0f, 0.8f, 0, PITCH_NORM );
+}
+
+// The other end of this engineer's pair.
+CTFTeleporter *CTFTeleporter::FindMatch( void )
+{
+	int iWant = IsEntrance() ? BUILD_TELEPORTER_EXIT : BUILD_TELEPORTER_ENTRANCE;
+	CBaseEntity *pEnt = NULL;
+
+	while ( ( pEnt = UTIL_FindEntityByClassname( pEnt, "building_teleporter" ) ) != NULL )
+	{
+		CTFTeleporter *pTele = (CTFTeleporter *)pEnt;
+		if ( (CBaseEntity *)pTele->real_owner == (CBaseEntity *)real_owner && pTele->m_iType == iWant )
+			return pTele;
+	}
+	return NULL;
+}
+
+void CTFTeleporter::TeleporterTouch( CBaseEntity *pOther )
+{
+	if ( !( pOther->pev->flags & FL_CLIENT ) )
+		return;
+
+	CBaseEntity *pOwner = real_owner;
+
+	if ( pOther->team_no && pOther->team_no != team_no )
+	{
+		if ( pOwner )
+			ClientPrint( pOwner->pev, HUD_PRINTCENTER,
+			             IsEntrance() ? "#Teleporter_entrance_enemy_use" : "#Teleporter_exit_enemy_use" );
+		return;
+	}
+
+	if ( !IsEntrance() )
+	{
+		if ( m_iState == TELE_STATE_IDLE )
+			ClientPrint( pOther->pev, HUD_PRINTCENTER, "#Teleporter_exit_idle" );
+		return;
+	}
+
+	if ( m_iState == TELE_STATE_IDLE )
+	{
+		ClientPrint( pOther->pev, HUD_PRINTCENTER, "#Teleporter_entrance_idle" );
+		return;
+	}
+
+	if ( m_iState != TELE_STATE_READY )
+		return;
+
+	// a goal item that bars teleporting keeps the carrier here
+	if ( pOther->is_unableto_spy_or_teleport )
+	{
+		CBaseEntity *pItem = NULL;
+		while ( ( pItem = UTIL_FindEntityByClassname( pItem, "item_tfgoal" ) ) != NULL )
+		{
+			if ( pItem->pev->owner == pOther->edict() && ( pItem->goal_result & TFGR_REMOVE_DISGUISE ) )
+			{
+				ClientPrint( pOther->pev, HUD_PRINTCENTER, "#Teleporter_carrying_goal", STRING( pItem->pev->netname ) );
+				return;
+			}
+		}
+		return;
+	}
+
+	if ( pOther->pev->velocity.Length() != 0.0f )
+		return;
+
+	CTFTeleporter *pExit = FindMatch();
+	if ( !pExit || pExit->m_iState != TELE_STATE_READY )
+		return;
+
+	m_hPlayer = pOther;
+	m_iState = TELE_STATE_SENDING;
+	m_flMyNextThink = gpGlobals->time + 0.1f;
+}
+
+void CTFTeleporter::SetTeleporterRings( int iState )
+{
+	int iBit = IsEntrance() ? TELE_EV_ENTRY : TELE_EV_EXIT;
+	BOOL bOn = ( iState >= TELE_STATE_READY && iState <= TELE_STATE_RECHARGE );
+
+	if ( bOn && !( m_iBuildingEventState & iBit ) )
+	{
+		TF_BuildingEvent( this, iBit, team_no, 1 );
+		m_iBuildingEventState |= iBit;
+	}
+	else if ( !bOn && ( m_iBuildingEventState & iBit ) )
+	{
+		TF_BuildingEvent( this, iBit, team_no, 0 );
+		m_iBuildingEventState &= ~iBit;
+	}
+}
+
+void CTFTeleporter::SetTeleporterParticles( int iState )
+{
+	if ( iState == TELE_STATE_READY )
+	{
+		if ( IsEntrance() && !( m_iBuildingEventState & TELE_EV_PARTICLES ) )
+		{
+			TF_BuildingEvent( this, TELE_EV_PARTICLES, team_no, 1 );
+			m_iBuildingEventState |= TELE_EV_PARTICLES;
+			TF_BuildingEvent( this, TELE_EV_READY, team_no, 1 );
+		}
+	}
+	else if ( m_iBuildingEventState & TELE_EV_PARTICLES )
+	{
+		TF_BuildingEvent( this, TELE_EV_PARTICLES, team_no, 0 );
+		m_iBuildingEventState &= ~TELE_EV_PARTICLES;
+	}
+}
+
+static void TF_TeleResetFade( CBasePlayer *pPlayer )
+{
+	pPlayer->pev->rendermode = kRenderNormal;
+	pPlayer->pev->renderamt = 0;
+	pPlayer->m_flFadeAmount = 0;
+	pPlayer->m_iFadeDirection = 0;
+}
+
+static void TF_TeleResetGlowshell( CBasePlayer *pPlayer )
+{
+	pPlayer->pev->renderfx = kRenderFxNone;
+	pPlayer->pev->rendercolor = g_vecZero;
+	pPlayer->pev->renderamt = 0;
+	pPlayer->m_flTeleporterEffectEndTime = 0;
+}
+
+// [tfc.so] TeleporterResetEffects, from Spawn and StartObserver
+void TeleporterResetEffects( CBasePlayer *pPlayer )
+{
+	if ( !pPlayer )
+		return;
+	TF_TeleResetFade( pPlayer );
+	TF_TeleResetGlowshell( pPlayer );
+}
+
+// [tfc.so] from PreThink: the arrival glow shell runs out
+void CBasePlayer::TeleporterEffectThink( void )
+{
+	if ( m_flTeleporterEffectEndTime != 0 && m_flTeleporterEffectEndTime <= gpGlobals->time )
+		TF_TeleResetGlowshell( this );
+}
+
+static void TF_TeleSpecFade( CBasePlayer *pPlayer, int bIn, int iTeam, float flTime, int iAlpha )
+{
+	MESSAGE_BEGIN( MSG_ALL, gmsgSpecFade );
+		WRITE_BYTE( ENTINDEX( pPlayer->edict() ) );
+		WRITE_BYTE( bIn );
+		WRITE_BYTE( iTeam );
+		WRITE_SHORT( (int)( flTime * 100.0f ) );
+		WRITE_BYTE( iAlpha );
+	MESSAGE_END();
+}
+
+// Frees a traveller whose trip was cut short.
+void CTFTeleporter::StopPlayer( CBasePlayer *pPlayer, const char *pszMsg )
+{
+	pPlayer->tfstate &= ~TFSTATE_CANT_MOVE;
+	pPlayer->TeamFortress_SetSpeed();
+	pPlayer->m_iBeingTeleported = 0;
+
+	MESSAGE_BEGIN( MSG_ONE, gmsgResetFade, NULL, pPlayer->pev );
+	MESSAGE_END();
+	MESSAGE_BEGIN( MSG_ALL, gmsgSpecFade );
+		WRITE_BYTE( ENTINDEX( pPlayer->edict() ) );
+		WRITE_BYTE( 1 );
+		WRITE_BYTE( 0 );
+		WRITE_SHORT( 1 );
+		WRITE_BYTE( 0 );
+	MESSAGE_END();
+
+	TF_TeleResetFade( pPlayer );
+
+	if ( pszMsg )
+	{
+		ClientPrint( pPlayer->pev, HUD_PRINTCENTER, pszMsg );
+		CBaseEntity *pOwner = real_owner;
+		pPlayer->TakeDamage( pev, pOwner ? pOwner->pev : pev, 500, DMG_ALWAYSGIB );
+	}
+}
+
+// [tfc.so] PlayerStoppedTeleporting, from Killed and StartObserver
+void PlayerStoppedTeleporting( CBasePlayer *pPlayer )
+{
+	if ( !pPlayer )
+		return;
+
+	CBaseEntity *pEnt = NULL;
+	while ( ( pEnt = UTIL_FindEntityByClassname( pEnt, "building_teleporter" ) ) != NULL )
+	{
+		CTFTeleporter *pTele = (CTFTeleporter *)pEnt;
+		if ( pTele->Traveller() != pPlayer )
+			continue;
+
+		pTele->m_iState = TELE_STATE_RECHARGE;
+		pTele->m_flMyNextThink = gpGlobals->time + TF_TELE_RECHARGE * pTele->m_flDamageDelay;
+		pTele->SetTeleporterRings( pTele->m_iState );
+		pTele->SetTeleporterParticles( pTele->m_iState );
+		pTele->m_hPlayer = NULL;
+	}
+
+	pPlayer->m_iBeingTeleported = 0;
+	pPlayer->tfstate &= ~TFSTATE_CANT_MOVE;
+
+	MESSAGE_BEGIN( MSG_ONE, gmsgResetFade, NULL, pPlayer->pev );
+	MESSAGE_END();
+	MESSAGE_BEGIN( MSG_ALL, gmsgSpecFade );
+		WRITE_BYTE( ENTINDEX( pPlayer->edict() ) );
+		WRITE_BYTE( 1 );
+		WRITE_BYTE( 0 );
+		WRITE_SHORT( 1 );
+		WRITE_BYTE( 0 );
+	MESSAGE_END();
+
+	TF_TeleResetFade( pPlayer );
+}
+
+void CTFTeleporter::TeleporterThink( void )
+{
+	CheckBelowBuilding( TF_SENTRY_FALL_DIST );
+
+	if ( pev->origin != m_vOldOrigin )
+	{
+		TF_BuildingEvent( this, TELE_EV_MOVED, 0, 0 );
+		m_vOldOrigin = pev->origin;
+	}
+
+	DoDamageEffects( pev, pev->max_health * 0.66f, pev->max_health * 0.33f );
+	TF_BuildingFadeGlow( this );
+
+	// the traveller's alpha fades between the two ends
+	CBasePlayer *pPlayer = Traveller();
+	if ( pPlayer && pPlayer->pev->rendermode != kRenderNormal )
+	{
+		if ( pPlayer->m_iFadeDirection == 1 && IsEntrance() )
+			pPlayer->pev->renderamt = Q_min( pPlayer->pev->renderamt + pPlayer->m_flFadeAmount, 255.0f );
+		else if ( pPlayer->m_iFadeDirection == 0 && !IsEntrance() )
+			pPlayer->pev->renderamt = Q_max( pPlayer->pev->renderamt - pPlayer->m_flFadeAmount, 0.0f );
+	}
+
+	pev->nextthink = gpGlobals->time + TF_TELE_THINK;
+
+	if ( m_flMyNextThink != 0 && m_flMyNextThink > gpGlobals->time )
+		return;
+
+	CTFTeleporter *pMatch;
+	float flFade;
+
+	switch ( m_iState )
+	{
+	case TELE_STATE_READY:
+		pMatch = FindMatch();
+		if ( !pMatch || pMatch->m_iState == TELE_STATE_INIT )
+			m_iState = TELE_STATE_IDLE;
+		m_flMyNextThink = gpGlobals->time + 0.1f;
+		break;
+
+	case TELE_STATE_SENDING:
+		if ( !pPlayer )
+		{
+			m_iState = TELE_STATE_READY;
+			break;
+		}
+
+		pPlayer->tfstate |= TFSTATE_CANT_MOVE;
+		pPlayer->TeamFortress_SetSpeed();
+		pPlayer->m_iBeingTeleported = 1;
+		m_flDamageDelay = 1.0f;
+
+		pMatch = FindMatch();
+		if ( !pMatch || pMatch->m_iState != TELE_STATE_READY )
+		{
+			pPlayer->tfstate &= ~TFSTATE_CANT_MOVE;
+			pPlayer->TeamFortress_SetSpeed();
+			pPlayer->m_iBeingTeleported = 0;
+			TF_TeleResetFade( pPlayer );
+			m_iState = TELE_STATE_RECHARGE;
+			m_flMyNextThink = gpGlobals->time + TF_TELE_RECHARGE * m_flDamageDelay;
+			break;
+		}
+
+		flFade = TF_TELE_FADE * m_flDamageDelay;
+		TeleporterResetEffects( pPlayer );
+		UTIL_ScreenFade( pPlayer, TF_TeleTeamColor( team_no ), flFade, flFade, 255, FFADE_OUT );
+		pPlayer->pev->rendermode = kRenderTransAlpha;
+		pPlayer->pev->renderamt = 255;
+		pPlayer->m_iFadeDirection = 0;
+		pPlayer->m_flFadeAmount = 255.0f / ( flFade / TF_TELE_THINK );
+		TF_TeleSpecFade( pPlayer, 0, team_no, flFade, 255 );
+		TF_BuildingEvent( this, TELE_EV_OUT, team_no, 1 );
+
+		pMatch->m_flDamageDelay = m_flDamageDelay;
+		pMatch->m_hPlayer = pPlayer;
+		pMatch->m_iState = TELE_STATE_RECEIVING;
+		pMatch->m_flMyNextThink = gpGlobals->time + flFade;
+
+		m_iState = TELE_STATE_RECHARGE;
+		m_flMyNextThink = gpGlobals->time + TF_TELE_ENTRY_WAIT * m_flDamageDelay;
+		break;
+
+	case TELE_STATE_RECEIVING:
+	{
+		if ( !pPlayer )
+		{
+			m_iState = TELE_STATE_READY;
+			break;
+		}
+
+		Vector vecDest = pev->origin + Vector( 0, 0, TF_TELE_EXIT_Z );
+		CTelefragDeath *pDeath = GetClassPtr( (CTelefragDeath *)NULL );
+		UTIL_SetOrigin( pDeath->pev, vecDest );
+		pDeath->pev->owner = pPlayer->edict();
+		pDeath->m_hTeleporter = this;
+		pDeath->Spawn();
+
+		UTIL_SetOrigin( pPlayer->pev, vecDest );
+
+		flFade = TF_TELE_FADE * m_flDamageDelay;
+		UTIL_ScreenFade( pPlayer, TF_TeleTeamColor( team_no ), flFade, 0, 255, FFADE_IN );
+		pPlayer->pev->rendermode = kRenderTransAlpha;
+		pPlayer->pev->renderamt = 0;
+		pPlayer->m_iFadeDirection = 1;
+		pPlayer->m_flFadeAmount = 255.0f / ( flFade / TF_TELE_THINK );
+		TF_TeleSpecFade( pPlayer, 1, team_no, flFade, 255 );
+		TF_BuildingEvent( this, TELE_EV_IN, team_no, 1 );
+
+		m_iState = TELE_STATE_ARRIVED;
+		m_flMyNextThink = gpGlobals->time + flFade;
+		break;
+	}
+
+	case TELE_STATE_ARRIVED:
+		if ( pPlayer )
+		{
+			pPlayer->tfstate &= ~TFSTATE_CANT_MOVE;
+			pPlayer->TeamFortress_SetSpeed();
+			pPlayer->m_iBeingTeleported = 0;
+			TF_TeleResetFade( pPlayer );
+
+			// a team-coloured glow shell marks a fresh arrival
+			pPlayer->pev->renderfx = kRenderFxGlowShell;
+			pPlayer->pev->rendercolor = TF_TeleTeamColor( team_no );
+			pPlayer->pev->renderamt = 15;
+			pPlayer->m_flTeleporterEffectEndTime = gpGlobals->time + TF_TELE_GLOW_TIME;
+		}
+
+		m_iState = TELE_STATE_RECHARGE;
+		m_flMyNextThink = gpGlobals->time + TF_TELE_RECHARGE * m_flDamageDelay;
+		m_hPlayer = NULL;
+
+		if ( ( pMatch = FindMatch() ) != NULL )
+			pMatch->m_hPlayer = NULL;
+		break;
+
+	case TELE_STATE_RECHARGE:
+		m_iState = TELE_STATE_READY;
+		m_flMyNextThink = gpGlobals->time + 0.1f;
+		break;
+
+	default:
+		pMatch = FindMatch();
+		if ( pMatch && pMatch->m_iState != TELE_STATE_INIT )
+			m_iState = TELE_STATE_READY;
+		m_flMyNextThink = gpGlobals->time + 0.1f;
+		break;
+	}
+
+	SetTeleporterRings( m_iState );
+	SetTeleporterParticles( m_iState );
+}
+
+// [tfc.so] 5 metal per point of health; a full pair's recharge is cut to 10 s.
+BOOL CTFTeleporter::EngineerUse( CBasePlayer *pPlayer )
+{
+	if ( !pPlayer || !m_bBuilt )
+		return FALSE;
+
+	int iNeed = (int)ceil( ( pev->max_health - pev->health ) / 5.0f );
+	int iSpend = TF_MIN( iNeed, pPlayer->ammo_cells );
+	if ( iSpend <= 0 )
+		return FALSE;
+
+	ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY,
+	             IsEntrance() ? "#Teleporter_Entrance_Repaired" : "#Teleporter_Exit_Repaired" );
+	pPlayer->ammo_cells -= iSpend;
+	pev->health = TF_MIN( pev->health + iSpend * 5, pev->max_health );
+
+	CTFTeleporter *pMatch = FindMatch();
+	if ( pMatch && m_iState == TELE_STATE_RECHARGE && pMatch->m_iState == TELE_STATE_RECHARGE
+	     && pev->health == pev->max_health && pMatch->pev->health == pMatch->pev->max_health
+	     && m_flMyNextThink - gpGlobals->time > TF_TELE_RECHARGE )
+	{
+		m_flMyNextThink = gpGlobals->time + TF_TELE_RECHARGE;
+		pMatch->m_flMyNextThink = gpGlobals->time + TF_TELE_RECHARGE;
+	}
+
+	return TRUE;
+}
+
+int CTFTeleporter::TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, float flDamage, int bitsDamageType )
+{
+	if ( pev->takedamage == DAMAGE_NO )
+		return 0;
+
+	if ( !TF_BuildingCanTakeDamage( this, pevAttacker, bitsDamageType ) )
+		return 0;
+
+	TF_BuildingHitGlow( this );
+	pev->health -= flDamage;
+	if ( pev->health <= 0 )
+	{
+		Killed( pevInflictor, pevAttacker, GIB_NORMAL );
+		return 0;
+	}
+
+	return 1;
+}
+
+// [tfc.so] whoever was mid-trip on this pair dies with it
+void CTFTeleporter::TeleporterKilled( void )
+{
+	CTFTeleporter *pMatch = FindMatch();
+	const char *pszMsg = IsEntrance() ? "#Teleporter_Entrance_Gone_Player_Killed"
+	                                  : "#Teleporter_Exit_Gone_Player_Killed";
+
+	if ( Traveller() )
+		StopPlayer( Traveller(), pszMsg );
+	else if ( pMatch && pMatch->Traveller() )
+		pMatch->StopPlayer( pMatch->Traveller(), pszMsg );
+
+	m_hPlayer = NULL;
+
+	if ( pMatch )
+	{
+		pMatch->m_hPlayer = NULL;
+		pMatch->m_iState = TELE_STATE_IDLE;
+		pMatch->m_flMyNextThink = gpGlobals->time + 0.1f;
+		pMatch->SetTeleporterRings( pMatch->m_iState );
+		pMatch->SetTeleporterParticles( pMatch->m_iState );
+	}
+}
+
+// Deferred like the other buildings: Killed can run inside the engineer's own death.
+void CTFTeleporter::Detonate( void )
+{
+	TakeDamage( pev, real_owner ? real_owner->pev : pev, 500, 0 );
+}
+
+void CTFTeleporter::Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int iGib )
+{
+	if ( m_iDestroyed )
+		return;
+	m_iDestroyed = 1;
+
+	CBasePlayer *pOwner = (CBasePlayer *)( (CBaseEntity *)real_owner );
+	BOOL bEntrance = IsEntrance();
+
+	pev->takedamage = DAMAGE_NO;
+	SetTouch( NULL );
+
+	if ( pOwner && pOwner->IsPlayer() )
+	{
+		int &iNoMsg = bEntrance ? pOwner->no_entry_teleporter_message : pOwner->no_exit_teleporter_message;
+
+		if ( bEntrance )
+			pOwner->has_entry_teleporter = 0;
+		else
+			pOwner->has_exit_teleporter = 0;
+
+		if ( !iNoMsg )
+			ClientPrint( pOwner->pev, HUD_PRINTCENTER,
+			             bEntrance ? "#Teleporter_Entrance_Destroyed" : "#Teleporter_Exit_Destroyed" );
+		iNoMsg = 0;
+		TeamFortress_SendBuildState( pOwner );
+	}
+
+	TF_BuildingEvent( this, TELE_EV_REMOVE, 0, 0 );
+	TeleporterKilled();
+
+	SetThink( &CTFTeleporter::TeleporterExplode );
+	pev->nextthink = gpGlobals->time + 0.1f;
+}
+
+void CTFTeleporter::TeleporterExplode( void )
+{
+	CBaseEntity *pOwner = real_owner;
+
+	MESSAGE_BEGIN( MSG_PVS, SVC_TEMPENTITY, pev->origin );
+		WRITE_BYTE( TE_EXPLODEMODEL );
+		WRITE_COORD( pev->origin.x );
+		WRITE_COORD( pev->origin.y );
+		WRITE_COORD( pev->origin.z );
+		WRITE_COORD( 400 );
+		WRITE_SHORT( m_iShardIndex );
+		WRITE_SHORT( 10 );
+		WRITE_BYTE( 25 );
+	MESSAGE_END();
+
+	if ( pOwner && !pOwner->has_disconnected )
+		::RadiusDamage( pev->origin, pev, pOwner->pev, 25, 25 * 2.5f, CLASS_NONE, DMG_BLAST | DMG_RADIUS_QUAKE );
+
+	MESSAGE_BEGIN( MSG_PAS, SVC_TEMPENTITY, pev->origin );
+		WRITE_BYTE( TE_EXPLOSION );
+		WRITE_COORD( pev->origin.x );
+		WRITE_COORD( pev->origin.y );
+		WRITE_COORD( pev->origin.z );
+		WRITE_SHORT( g_sModelIndexFireball );
+		WRITE_BYTE( 30 );
+		WRITE_BYTE( 15 );
+		WRITE_BYTE( TE_EXPLFLAG_NOADDITIVE | TE_EXPLFLAG_NODLIGHTS );
+	MESSAGE_END();
+
+	pev->solid = SOLID_NOT;
+	SetThink( NULL );
+	UTIL_Remove( this );
+}
+
+// [tfc.so] Menu_Engineer_Input: next to it, nobody mid-trip, 62 metal back
+void CTFTeleporter::Dismantle( CBasePlayer *pOwner )
+{
+	BOOL bEntrance = IsEntrance();
+
+	if ( ( pev->origin - pOwner->pev->origin ).Length() > TF_TELE_DISMANTLE_DIST )
+	{
+		ClientPrint( pOwner->pev, HUD_PRINTCENTER, "#Teleporter_DistDismantle" );
+		return;
+	}
+
+	CTFTeleporter *pMatch = FindMatch();
+	if ( Traveller() || ( pMatch && pMatch->Traveller() ) )
+	{
+		ClientPrint( pOwner->pev, HUD_PRINTCENTER, "#Teleporter_UseDismantle" );
+		return;
+	}
+
+	ClientPrint( pOwner->pev, HUD_PRINTNOTIFY,
+	             bEntrance ? "#Teleporter_entrance_dismantle" : "#Teleporter_exit_dismantle" );
+	UTIL_LogPrintf( "\"%s<%i><%s><%s>\" triggered \"%s\"\n", STRING( pOwner->pev->netname ),
+	                GETPLAYERUSERID( pOwner->edict() ), GETPLAYERAUTHID( pOwner->edict() ),
+	                GetTeamName( pOwner->team_no ),
+	                bEntrance ? "Teleporter_Entrance_Dismantle" : "Teleporter_Exit_Dismantle" );
+	TF_BuildingEvent( this, TELE_EV_REMOVE, 0, 0 );
+
+	pOwner->ammo_cells += TF_TELE_DISMANTLE;
+	pOwner->TeamFortress_CheckClassStats();
+
+	if ( bEntrance )
+		pOwner->has_entry_teleporter = 0;
+	else
+		pOwner->has_exit_teleporter = 0;
+
+	m_iDestroyed = 1;
+	real_owner = NULL;
+	pev->solid = SOLID_NOT;
+	SetThink( NULL );
+	SetTouch( NULL );
+	UTIL_Remove( this );
+	TeamFortress_SendBuildState( pOwner );
+}
+
+// [tfc.so] "detentryteleporter" / "detexitteleporter": 500 damage, 100 metal back if it is stuck
+static void DestroyTeleporter( CBasePlayer *pOwner, int iType )
+{
+	CBaseEntity *pEnt = NULL;
+
+	while ( ( pEnt = UTIL_FindEntityByClassname( pEnt, "building_teleporter" ) ) != NULL )
+	{
+		CTFTeleporter *pTele = (CTFTeleporter *)pEnt;
+		if ( (CBaseEntity *)pTele->real_owner != (CBaseEntity *)pOwner || pTele->m_iType != iType )
+			continue;
+
+		int iContents = UTIL_PointContents( pTele->pev->origin );
+		if ( iContents == CONTENTS_SOLID || iContents == CONTENTS_SKY )
+		{
+			pOwner->ammo_cells += 100;
+			pOwner->TeamFortress_CheckClassStats();
+		}
+
+		pTele->TakeDamage( pTele->pev, pTele->pev, 500, 0 );
+	}
+}
+
+// [tfc.so] replays every building's live FX bits to one client; 0x800 remaps entindex to fparam1
+void SendBuildingEventInfo( CBasePlayer *pPlayer )
+{
+	static const char *s_pszClasses[] = { "building_sentrygun", "building_dispenser", "building_teleporter" };
+
+	for ( int i = 0; i < ARRAYSIZE( s_pszClasses ); i++ )
+	{
+		CBaseEntity *pEnt = NULL;
+		while ( ( pEnt = UTIL_FindEntityByClassname( pEnt, s_pszClasses[i] ) ) != NULL )
+		{
+			if ( !pEnt->m_iBuildingEventState || !pEnt->m_usBuildingEvent )
+				continue;
+
+			PLAYBACK_EVENT_FULL( FEV_RELIABLE | FEV_HOSTONLY, pPlayer->edict(), pEnt->m_usBuildingEvent, 0,
+			                     pEnt->pev->origin, g_vecZero, (float)ENTINDEX( pEnt->edict() ), 0,
+			                     pEnt->m_iBuildingEventState | 0x800, pEnt->team_no, 1, 0 );
+		}
+	}
+}
+
+CBaseEntity *CBasePlayer::GetTeleporter( int type )
+{
+	CBaseEntity *pEnt = NULL;
+
+	while ( ( pEnt = UTIL_FindEntityByClassname( pEnt, "building_teleporter" ) ) != NULL )
+	{
+		if ( (CBaseEntity *)pEnt->real_owner == (CBaseEntity *)this && ( (CTFTeleporter *)pEnt )->m_iType == type )
+			return pEnt;
+	}
+	return NULL;
+}
+
 // Spanner on a teammate: armour for metal, 5 per 1 [tfc.so]
-//=========================================================
 
 BOOL CBasePlayer::EngineerUse( CBasePlayer *pPlayer )
 {
@@ -1288,14 +2154,10 @@ BOOL CBasePlayer::EngineerUse( CBasePlayer *pPlayer )
 	return TRUE;
 }
 
-//=========================================================
 // Build flow
-//=========================================================
 
-// Not TFC parity: 200 metal is the engineer's cap and a dispenser plus a sentry
-// costs 230, so retail engineers refill from map ammo packs between builds --
-// and those are Phase 5. At 1 this keeps an engineer's metal topped up so both
-// buildings can exist at once.
+// TEST AID, not parity: a dispenser plus a sentry costs 230 of a 200 cap, so at 1
+// this keeps an engineer's metal topped up and both can exist at once.
 cvar_t tf_build_freemetal = { "tf_build_freemetal", "0", FCVAR_SERVER };
 
 void TeamFortress_SendBuildState( CBasePlayer *pPlayer )
@@ -1317,6 +2179,14 @@ void TeamFortress_SendBuildState( CBasePlayer *pPlayer )
 			iState |= BS_CANB_DISPENSER;
 		if ( !pPlayer->has_sentry && pPlayer->ammo_cells >= BUILD_COST_SENTRYGUN )
 			iState |= BS_CANB_SENTRYGUN;
+		if ( pPlayer->has_entry_teleporter )
+			iState |= BS_HAS_ENTRY_TELEPORTER;
+		else if ( pPlayer->ammo_cells >= BUILD_COST_TELEPORTER )
+			iState |= BS_CANB_ENTRY_TELEPORTER;
+		if ( pPlayer->has_exit_teleporter )
+			iState |= BS_HAS_EXIT_TELEPORTER;
+		else if ( pPlayer->ammo_cells >= BUILD_COST_TELEPORTER )
+			iState |= BS_CANB_EXIT_TELEPORTER;
 	}
 
 	if ( iState == pPlayer->m_iClientBuildState )
@@ -1338,6 +2208,78 @@ static CBaseEntity *TF_FindBuilding( CBasePlayer *pPlayer, const char *pszClass 
 			return pEnt;
 	}
 	return NULL;
+}
+
+static int TF_HealthPercent( CBaseEntity *pEnt )
+{
+	if ( pEnt->pev->max_health <= 0 )
+		return 0;
+	int iPct = (int)( pEnt->pev->health / pEnt->pev->max_health * 100.0f );
+	return TF_MAX( 0, TF_MIN( 100, iPct ) );
+}
+
+// [tfc.so] TeamFortress_UpdateStatusBar engineer part: each entry takes line 1,
+// or line 0 once line 1 is used. Line text carries literal "%%" for the client parser.
+void TeamFortress_EngineerStatusBar( CBasePlayer *pPlayer, char *sbuf0, char *sbuf1, int *piAmmoPct )
+{
+	char szTele[SBAR_STRING_SIZE] = "";
+	char szTmp[SBAR_STRING_SIZE];
+
+	if ( pPlayer->has_sentry )
+	{
+		CBaseEntity *pEnt = NULL;
+
+		while ( ( pEnt = UTIL_FindEntityByClassname( pEnt, "building_sentrygun" ) ) != NULL )
+		{
+			if ( (CBaseEntity *)pEnt->real_owner != (CBaseEntity *)pPlayer )
+				continue;
+
+			CTFSentrygun *pGun = (CTFSentrygun *)pEnt;
+			BOOL bNoRockets = !pGun->ammo_rockets && pGun->m_iLevel == 3;
+
+			_snprintf( sbuf1, SBAR_STRING_SIZE, "#Sentry_sbar %d%%%%\n4 ammo: %%i4%%%%\n0", TF_HealthPercent( pGun ) );
+			sbuf1[SBAR_STRING_SIZE - 1] = 0;
+
+			if ( pGun->ammo_shells )
+			{
+				if ( pGun->maxammo_shells > 0 )
+					*piAmmoPct = (int)( (float)pGun->ammo_shells / pGun->maxammo_shells * 100.0f );
+				if ( bNoRockets )
+					strncat( sbuf1, " #No_Rockets", SBAR_STRING_SIZE - strlen( sbuf1 ) - 1 );
+			}
+			else
+			{
+				strncat( sbuf1, bNoRockets ? " #No_Ammo" : " #No_Shells", SBAR_STRING_SIZE - strlen( sbuf1 ) - 1 );
+			}
+		}
+	}
+
+	if ( pPlayer->has_entry_teleporter || pPlayer->has_exit_teleporter )
+	{
+		CBaseEntity *pEntry = pPlayer->GetTeleporter( BUILD_TELEPORTER_ENTRANCE );
+		CBaseEntity *pExit  = pPlayer->GetTeleporter( BUILD_TELEPORTER_EXIT );
+
+		if ( pEntry )
+		{
+			_snprintf( szTmp, sizeof( szTmp ), "#Teleporter_entry_sbar %d%%%%\n0", TF_HealthPercent( pEntry ) );
+			szTmp[sizeof( szTmp ) - 1] = 0;
+			strncat( szTele, szTmp, sizeof( szTele ) - strlen( szTele ) - 1 );
+		}
+		if ( pExit )
+		{
+			if ( szTele[0] )
+				strncat( szTele, "   ", sizeof( szTele ) - strlen( szTele ) - 1 );
+			_snprintf( szTmp, sizeof( szTmp ), "#Teleporter_exit_sbar %d%%%%\n0", TF_HealthPercent( pExit ) );
+			szTmp[sizeof( szTmp ) - 1] = 0;
+			strncat( szTele, szTmp, sizeof( szTele ) - strlen( szTele ) - 1 );
+		}
+
+		if ( szTele[0] )
+			strcpy( sbuf1[0] ? sbuf0 : sbuf1, szTele );
+	}
+
+	if ( pPlayer->is_building )
+		strcpy( sbuf1[0] ? sbuf0 : sbuf1, "#Engineer_building" );
 }
 
 // [tfc.so] dismantling hands back a flat 100 metal, whatever the building cost.
@@ -1408,8 +2350,20 @@ void CBasePlayer::TeamFortress_Build( int iBuildingID )
 		pszClass = "building_sentrygun";
 		break;
 
+	case BUILD_TELEPORTER_ENTRANCE:
+	case BUILD_TELEPORTER_EXIT:
+		if ( iBuildingID == BUILD_TELEPORTER_ENTRANCE ? has_entry_teleporter : has_exit_teleporter )
+		{
+			ClientPrint( pev, HUD_PRINTCENTER,
+			             iBuildingID == BUILD_TELEPORTER_ENTRANCE ? "#Build_entryteleporter" : "#Build_exitteleporter" );
+			return;
+		}
+		iCost = BUILD_COST_TELEPORTER;
+		iTime = BUILD_TIME_TELEPORTER;
+		pszClass = "building_teleporter";
+		break;
+
 	default:
-		// teleporters and the mortar are not implemented yet
 		ClientPrint( pev, HUD_PRINTNOTIFY, "#Build_nobuild" );
 		return;
 	}
@@ -1420,10 +2374,8 @@ void CBasePlayer::TeamFortress_Build( int iBuildingID )
 		return;
 	}
 
-	// [tfc.so] 64 u ahead at the PLAYER's own origin height, X/Y truncated to
-	// whole units. The building then drops to the floor through
-	// CheckBelowBuilding -- placing it on the floor here is what made every
-	// CheckArea read "no room".
+	// [tfc.so] 64 u ahead at the PLAYER's origin height, X/Y truncated; it drops
+	// through CheckBelowBuilding (a floor spot here fails every CheckArea).
 	UTIL_MakeAimVectors( pev->angles );
 	Vector vecForward = gpGlobals->v_forward;
 	vecForward.z = 0;
@@ -1451,6 +2403,17 @@ void CBasePlayer::TeamFortress_Build( int iBuildingID )
 		UTIL_Remove( pBuilding );
 		return;
 	}
+
+	// [tfc.so] team colormap for every building type -- unset colormap 0 was
+	// rendering sentry/dispenser with team 2's (red) remap regardless of team.
+	if ( team_no >= 0 && team_no < 5 )
+	{
+		int iTop = teamcolors[team_no][PC_RANDOM].topColor;
+		pBuilding->pev->colormap = iTop + ( ( ( iTop + 10 ) << 8 ) & 0xFFFF );
+	}
+
+	if ( FClassnameIs( pBuilding->pev, "building_teleporter" ) )
+		( (CTFTeleporter *)pBuilding )->m_iType = iBuildingID;
 
 	if ( iBuildingID == BUILD_SENTRYGUN )
 		( (CTFSentrygun *)pBuilding )->SetBuildAngles( pev->v_angle.y );
@@ -1551,6 +2514,10 @@ void CBaseEntity::Timer_FinishedBuilding( void )
 				( (CTFDispenser *)pBuilding )->Finished();
 				pPlayer->has_dispenser = 1;
 			}
+			else if ( FClassnameIs( pBuilding->pev, "building_teleporter" ) )
+			{
+				( (CTFTeleporter *)pBuilding )->Finished();
+			}
 		}
 
 		TeamFortress_SendBuildState( pPlayer );
@@ -1576,8 +2543,13 @@ void CBasePlayer::Engineer_RemoveBuildings( void )
 	if ( ( pEnt = TF_FindBuilding( this, "building_dispenser" ) ) != NULL )
 		( (CTFDispenser *)pEnt )->Detonate();
 
+	DestroyTeleporter( this, BUILD_TELEPORTER_ENTRANCE );
+	DestroyTeleporter( this, BUILD_TELEPORTER_EXIT );
+
 	has_sentry = 0;
 	has_dispenser = 0;
+	has_entry_teleporter = 0;
+	has_exit_teleporter = 0;
 	TeamFortress_SendBuildState( this );
 }
 
@@ -1610,6 +2582,17 @@ void CBasePlayer::TeamFortress_RemoveBuildings( void )
 // The tf15 VGUI command menu is the build UI; these are the strings it sends.
 BOOL TeamFortress_BuildCommand( CBasePlayer *pPlayer, const char *pcmd )
 {
+	// [tfc.so] ClientCommand: the client asks once, from its HUD reset
+	if ( FStrEq( pcmd, "sendevents" ) )
+	{
+		if ( !pPlayer->m_bSentBuildingEvents )
+		{
+			SendBuildingEventInfo( pPlayer );
+			pPlayer->m_bSentBuildingEvents = TRUE;
+		}
+		return TRUE;
+	}
+
 	if ( FStrEq( pcmd, "build" ) )
 	{
 		pPlayer->TeamFortress_EngineerBuild( CMD_ARGC() >= 2 ? atoi( CMD_ARGV( 1 ) ) : 0 );
@@ -1625,6 +2608,12 @@ BOOL TeamFortress_BuildCommand( CBasePlayer *pPlayer, const char *pcmd )
 				DestroyBuilding( pPlayer, (char *)"building_sentrygun" );
 			else if ( id == BUILD_DISPENSER )
 				DestroyBuilding( pPlayer, (char *)"building_dispenser" );
+			else if ( id == BUILD_TELEPORTER_ENTRANCE || id == BUILD_TELEPORTER_EXIT )
+			{
+				CBaseEntity *pTele = pPlayer->GetTeleporter( id );
+				if ( pTele )
+					( (CTFTeleporter *)pTele )->Dismantle( pPlayer );
+			}
 		}
 		return TRUE;
 	}
@@ -1656,9 +2645,12 @@ BOOL TeamFortress_BuildCommand( CBasePlayer *pPlayer, const char *pcmd )
 		return TRUE;
 	}
 
-	// teleporters are not built yet; swallow their commands quietly
 	if ( FStrEq( pcmd, "detentryteleporter" ) || FStrEq( pcmd, "detexitteleporter" ) )
+	{
+		if ( TF_IsEngineer( pPlayer ) )
+			DestroyTeleporter( pPlayer, FStrEq( pcmd, "detentryteleporter" ) ? BUILD_TELEPORTER_ENTRANCE : BUILD_TELEPORTER_EXIT );
 		return TRUE;
+	}
 
 	return FALSE;
 }

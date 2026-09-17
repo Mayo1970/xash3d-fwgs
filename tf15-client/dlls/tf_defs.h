@@ -1271,7 +1271,6 @@ void TeamFortress_JoinTeam( CBasePlayer *pPlayer, int iTeam );
 void TeamFortress_ChangeClass( CBasePlayer *pPlayer, int iClass );
 void TeamFortress_PlayerSpawn( CBasePlayer *pPlayer );
 BOOL TeamFortress_ClientCommand( CBasePlayer *pPlayer, const char *pcmd );
-edict_t *TeamFortress_SelectTeamSpawnPoint( CBasePlayer *pPlayer );
 void TeamFortress_SyncAmmo( CBasePlayer *pPlayer );
 
 // TFC-6 Phase 2 -- grenades (tf_grenade.cpp)
@@ -1285,9 +1284,23 @@ void TeamFortress_ProjectileThink( CBasePlayer *pPlayer );
 
 // TFC-6 Phase 4 -- engineer buildings (tf_building.cpp) + spy (tf_spy.cpp)
 void TeamFortress_SendBuildState( CBasePlayer *pPlayer );
+void TeamFortress_EngineerStatusBar( CBasePlayer *pPlayer, char *sbuf0, char *sbuf1, int *piAmmoPct );
 BOOL TeamFortress_BuildCommand( CBasePlayer *pPlayer, const char *pcmd );
 void TeamFortress_SpyThink( CBasePlayer *pPlayer );
 BOOL TeamFortress_SpyCommand( CBasePlayer *pPlayer, const char *pcmd );
+
+// TFC-6 Phase 5 -- detpack (tf_detpack.cpp), grenade cancel (tf_grenade.cpp)
+void TeamFortress_SendDetpackState( CBasePlayer *pPlayer );
+BOOL TeamFortress_DetpackCommand( CBasePlayer *pPlayer, const char *pcmd );
+BOOL TeamFortress_DetpackBlocked( CBaseEntity *pOther );
+void TeamFortress_CancelPrimedGrenade( CBasePlayer *pPlayer );
+void TeamFortress_DropCarriedItems( CBasePlayer *pPlayer );
+void TeamFortress_SpyStandUp( CBasePlayer *pPlayer );
+BOOL TeamFortress_InNoGrenadeZone( CBaseEntity *pGren );
+void DoDamageEffects( entvars_t *pevBuilding, float flSpark, float flSmoke );
+void TeleporterResetEffects( CBasePlayer *pPlayer );
+void PlayerStoppedTeleporting( CBasePlayer *pPlayer );
+void SendBuildingEventInfo( CBasePlayer *pPlayer );
 
 // mapscript funcs
 void ParseTFServerSettings();
@@ -1312,6 +1325,7 @@ BOOL ActivationSucceeded( CBaseEntity *Goal, CBasePlayer *AP, CBaseEntity *Activ
 // prematch & ceasefire
 void Display_Prematch();
 void Check_Ceasefire();
+void Admin_CeaseFire( void );
 
 // admin
 void KickPlayer( CBaseEntity *pTarget );
@@ -1395,6 +1409,8 @@ class CTelefragDeath : public CBaseEntity
 public:
 	void		Spawn( void );
 	void		EXPORT	DeathTouch( CBaseEntity *pOther );
+
+	EHANDLE		m_hTeleporter;
 };
 
 class CTeamCheck : public CBaseDelay

@@ -169,6 +169,7 @@ void CTeamFortress::InitHUD( CBasePlayer *pl )
 	// Skip CHalfLifeTeamplay::InitHUD: it takes a team from the "model" userinfo (a
 	// class in TFC) and sends an empty gmsgTeamNames, leaving zero selectable teams.
 	CHalfLifeMultiplay::InitHUD( pl );
+	SendBuildingEventInfo( pl );   // [tfc.so] end of CHalfLifeMultiplay::InitHUD
 
 	MESSAGE_BEGIN( MSG_ONE, gmsgGameMode, NULL, pl->edict() );
 		WRITE_BYTE( 1 );  // teamplay
@@ -306,23 +307,76 @@ BOOL CTeamFortress::IsValidTeam( const char *pTeamName )
 	return GetTeamIndex( pTeamName ) != -1;
 }
 
-edict_t *CTeamFortress::GetPlayerSpawnSpot( CBasePlayer *pPlayer )
+// [tfc.so] CGameRules::GetPlayerSpawnSpot: a team spawn's messages, results and
+// one-shot flags, then the cease-fire freeze.
+static void TF_SpawnSpotResults( CBaseEntity *pSpot, CBasePlayer *pPlayer )
 {
-	edict_t *pSpot = TeamFortress_SelectTeamSpawnPoint( pPlayer );
+	BOOL bSkipMsgs = FALSE;
 
-	if ( pSpot )
+	if ( pSpot->pev->message )
 	{
-		pPlayer->pev->origin     = VARS( pSpot )->origin + Vector( 0, 0, 1 );
-		pPlayer->pev->v_angle    = g_vecZero;
-		pPlayer->pev->velocity   = g_vecZero;
-		pPlayer->pev->angles     = VARS( pSpot )->angles;
-		pPlayer->pev->punchangle = g_vecZero;
-		pPlayer->pev->fixangle   = TRUE;
-		return pSpot;
+		if ( pPlayer->forced_spawn )
+			bSkipMsgs = TRUE;
+		else
+		{
+			pPlayer->delayed_spawn_message = pSpot->pev->message;
+			if ( !( pSpot->goal_activation & TFSP_MULTIPLEMSGS ) )
+				pSpot->pev->message = iStringNull;
+		}
 	}
 
+	if ( !bSkipMsgs && pSpot->org_message && !pPlayer->forced_spawn )
+	{
+		ClientPrint( pPlayer->pev, HUD_PRINTCENTER, STRING( pSpot->org_message ) );
+		if ( !( pSpot->goal_activation & TFSP_MULTIPLEMSGS ) )
+			pSpot->org_message = iStringNull;
+	}
+
+	DoResults( pSpot, pPlayer, TRUE );
+
+	if ( pSpot->items && !( pSpot->goal_activation & TFSP_MULTIPLEITEMS ) )
+		pSpot->items = 0;
+
+	if ( pSpot->goal_effects == TFSP_REMOVESELF )
+		pSpot->goal_state = TFGS_REMOVED;
+}
+
+edict_t *CTeamFortress::GetPlayerSpawnSpot( CBasePlayer *pPlayer )
+{
+	CBaseEntity *pSpot = pPlayer->FindTeamSpawnPoint();
+
 	// No matching info_player_teamspawn -- fall back to DM/start spawns.
-	return CHalfLifeMultiplay::GetPlayerSpawnSpot( pPlayer );
+	if ( !pSpot )
+		return CHalfLifeMultiplay::GetPlayerSpawnSpot( pPlayer );
+
+	pPlayer->pev->origin     = pSpot->pev->origin + Vector( 0, 0, 1 );
+	pPlayer->pev->v_angle    = g_vecZero;
+	pPlayer->pev->velocity   = g_vecZero;
+	pPlayer->pev->angles     = pSpot->pev->angles;
+	pPlayer->pev->punchangle = g_vecZero;
+	pPlayer->pev->fixangle   = TRUE;
+
+	EMIT_SOUND_DYN( pPlayer->edict(), CHAN_WEAPON, RANDOM_FLOAT( 0, 1 ) > 0.5f ? "misc/r_tele3.wav" : "misc/r_tele4.wav",
+	                1.0f, 0.8f, 0, PITCH_NORM );
+
+	if ( pSpot->Classify() == CLASS_TFSPAWN && gpGlobals->time > cb_prematch_time )
+		TF_SpawnSpotResults( pSpot, pPlayer );
+
+	pPlayer->forced_spawn = 0;
+
+	if ( cease_fire )
+	{
+		if ( !no_cease_fire_text )
+			ClientPrint( pPlayer->pev, HUD_PRINTCENTER, "#Game_ceasefire" );
+		UTIL_LogPrintf( "World triggered \"Cease_Fire\"\n" );
+
+		pPlayer->pev->iuser4 = 1;
+		pPlayer->tfstate |= TFSTATE_CANT_MOVE;
+		pPlayer->immune_to_check = gpGlobals->time + 10.0f;
+		pPlayer->TeamFortress_SetSpeed();
+	}
+
+	return pSpot->edict();
 }
 
 void CTeamFortress::PlayerThink( CBasePlayer *pPlayer )
@@ -335,4 +389,6 @@ void CTeamFortress::PlayerThink( CBasePlayer *pPlayer )
 	TeamFortress_ProjectileThink( pPlayer );
 	TeamFortress_SpyThink( pPlayer );
 	TeamFortress_SendBuildState( pPlayer );
+	TeamFortress_SendDetpackState( pPlayer );
+	pPlayer->TeleporterEffectThink();
 }
