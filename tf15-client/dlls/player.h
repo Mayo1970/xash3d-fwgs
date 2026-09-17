@@ -24,9 +24,7 @@
 #define PLAYER_MIN_BOUNCE_SPEED      200
 #define PLAYER_FALL_PUNCH_THRESHHOLD (float)350 // won't punch player's screen/make scrape noise unless player falling at least this fast.
 
-//
 // Player PHYSICS FLAGS bits
-//
 #define PFLAG_ONLADDER   ( 1 << 0 )
 #define PFLAG_ONSWING    ( 1 << 0 )
 #define PFLAG_ONTRAIN    ( 1 << 1 )
@@ -35,12 +33,7 @@
 #define PFLAG_USING      ( 1 << 4 ) // Using a continuous entity
 #define PFLAG_OBSERVER   ( 1 << 5 ) // player is locked in stationary cam mode. Spectators can move, observers can't.
 
-//
-// generic player
-//
-//-----------------------------------------------------
-//This is Half-Life player entity
-//-----------------------------------------------------
+// Half-Life player entity
 #define CSUITPLAYLIST 4 // max of 4 suit sentences queued up at any time
 
 #define SUIT_GROUP    TRUE
@@ -185,9 +178,7 @@ public:
 	int m_iFOV;       // field of view
 	int m_iClientFOV; // client's known FOV
 
-	// TFC-specific members used by player.cpp but never added to this header --
-	// this tree's server (dlls/) is BUILD_SERVER-gated off in upstream's own CI
-	// (CMakeLists.txt), so nothing here has ever actually been compiled before.
+	// TFC members player.cpp uses; upstream CI never built dlls/, so they were missing.
 	Vector m_vecLastViewAngles;
 	float m_flNextAmmoBurn;
 	float m_flAmmoStartCharge;
@@ -229,10 +220,8 @@ public:
 	float m_flConcStartTime;
 	float m_flConcDuration;
 
-	// TFC-6 Phase 2: hand-grenade prime/throw. m_iPrimedGrenType (the GR_TYPE_*)
-	// lives on CBaseEntity; these track when it was primed and which slot to bill.
-	// Concussion/gas disorientation uses the stock m_iConc* ramp above;
-	// caltrop/legshot slow uses the stock leg_damage (cbase.h).
+	// Hand-grenade prime time and billed slot (type is CBaseEntity::m_iPrimedGrenType).
+	// Conc/gas reuse the m_iConc* ramp; caltrop slow reuses leg_damage.
 	float m_flGrenadePrimeTime;
 	int m_iPrimedGrenSlot;
 
@@ -262,15 +251,8 @@ public:
 	// Server body in player.cpp; the client's no-op lives in cl_dll/tfc/tf_baseentity.cpp.
 	virtual void PainSound( void );
 	void Pain( void );
-	// Real bodies for these four live only in dlls/player.cpp (server-only,
-	// never compiled into the client) -- confirmed by a real "undefined
-	// reference" link error once the client build produced its own private
-	// CBasePlayer vtable. Opposite direction from the CLIENT_DLL gates
-	// elsewhere in this file: here the SERVER already has its real
-	// definition, so only the CLIENT gets an inline no-op, matching
-	// cbase.h's own CBaseEntity-level defaults for AddPoints/AddPointsToTeam/
-	// TeamID exactly. Confirmed zero call sites anywhere in the vendored
-	// client tree, so the no-op bodies are never actually reached.
+	// Real bodies are server-only (player.cpp); the client's own vtable needs these
+	// no-ops or it fails to link. The client never calls them.
 #ifdef CLIENT_DLL
 	virtual Vector GetGunPosition( void ) { return Vector( 0, 0, 0 ); }
 	virtual const char *TeamID( void ) { return ""; }
@@ -431,11 +413,8 @@ public:
 	float m_flLastTalkTime;
 	int m_cSpamPoints;
 
-	// Player ID
-	// Renamed from TeamFortress_{Init,Update}StatusBar: those two names were
-	// declared but never defined anywhere in this tree, while player.cpp
-	// calls the unprefixed names (matching hlsdk-portable's own convention)
-	// without a declaration at all -- a rename that was never finished.
+	// Player ID. Was TeamFortress_{Init,Update}StatusBar (never defined);
+	// player.cpp calls these unprefixed names.
 	void InitStatusBar( void );
 	void UpdateStatusBar( void );
 
@@ -449,14 +428,11 @@ public:
 	void TeamFortress_ExecClassScript( void );
 	void TeamFortress_ExecMapScript( void );
 	void TeamFortress_TeamShowMemberClasses( void );
-	// CBasePlayer's own override of these re-declares them (shadowing
-	// cbase.h's now-defaulted base versions), and TFC-2's server-only tree
-	// had no body for them either -- same CLIENT_DLL gate as cbase.h's base
-	// versions, same reason: TFC-3 found real (also no-op) definitions in
-	// cl_dll/tfc/tf_baseentity.cpp's client-only stub block.
+	// Same CLIENT_DLL split as cbase.h: the client's no-op bodies live in
+	// cl_dll/tfc/tf_baseentity.cpp; the EMP pair is real on the server (tf_grenade.cpp).
 #ifndef CLIENT_DLL
-	virtual void TeamFortress_CalcEMPDmgRad( float &damage, float &radius ) { }
-	virtual void TeamFortress_TakeEMPBlast( entvars_t *pevGren ) { }
+	virtual void TeamFortress_CalcEMPDmgRad( float &damage, float &radius );
+	virtual void TeamFortress_TakeEMPBlast( entvars_t *pevGren );
 	virtual void TeamFortress_EMPRemove( void ) { }
 	virtual void TeamFortress_TakeConcussionBlast( entvars_t *pevGren, float bouncemax ) { }
 	virtual void TeamFortress_Concuss( entvars_t *pevGren ) { }

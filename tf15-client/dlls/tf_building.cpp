@@ -93,6 +93,11 @@ extern int gmsgBuildState;
 #define TF_SENTRY_MUZZLE_MIN  20.0f
 #define TF_SENTRY_MUZZLE_FWD  24.0f
 
+// [tfc.so] CheckSentry / TeamFortress_TakeEMPBlast.
+#define TF_SENTRY_BASE_DIST   24.0f   // gun further than this from its legs malfunctions
+#define TF_BUILDING_EMP_DMG   200.0f
+#define TF_EVENT_BUILDING     "events/misc/tf_buildingevent.sc"
+
 enum tfturret_anim_e
 {
 	TURRET_ANIM_IDLE = 0,
@@ -190,6 +195,26 @@ static BOOL TF_BuildingCanTakeDamage( CBaseEntity *pBuilding, entvars_t *pevAtta
 
 	return ( iTeamplay & TEAMPLAY_NODIRECT ) ? FALSE : TRUE;
 }
+
+// [tfc.so] same body for all three buildings: a flat blast. With any teamplay damage
+// rule on, an ally's EMP only counts if it is the builder's own.
+static void TF_BuildingTakeEMP( CBaseEntity *pBuilding, entvars_t *pevGren )
+{
+	CBaseEntity *pAttacker = CBaseEntity::Instance( pevGren->owner ? pevGren->owner : INDEXENT( 0 ) );
+	int iRules = TEAMPLAY_HALFDIRECT | TEAMPLAY_NODIRECT | TEAMPLAY_HALFEXPLOSIVE | TEAMPLAY_NOEXPLOSIVE;
+
+	if ( !pAttacker )
+		return;
+
+	if ( ( (int)gpGlobals->teamplay & iRules ) && pBuilding->IsAlly( pAttacker )
+	     && (CBaseEntity *)pBuilding->real_owner != pAttacker )
+		return;
+
+	pBuilding->TakeDamage( pevGren, pAttacker->pev, TF_BUILDING_EMP_DMG, DMG_BLAST );
+}
+
+static void TF_UpdateEntityEvents( CBaseEntity *pEnt );
+static void TF_RemoveEntityEvents( CBaseEntity *pEnt );
 
 static BOOL TF_IsEngineer( CBasePlayer *pPlayer )
 {
@@ -305,6 +330,7 @@ public:
 	int TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, float flDamage, int bitsDamageType );
 	void Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int iGib );
 	BOOL EngineerUse( CBasePlayer *pPlayer );
+	void TeamFortress_TakeEMPBlast( entvars_t *pevGren ) { TF_BuildingTakeEMP( this, pevGren ); }
 
 	void EXPORT SentryRotate( void );
 	void EXPORT Attack( void );
@@ -317,6 +343,7 @@ public:
 	void SetSentryAnim( int iAnim );
 	void SetBuildAngles( float flYaw );
 
+	BOOL CheckSentry( void );
 	BOOL FindTarget( void );
 	BOOL ValidTarget( CBaseEntity *pTarget );
 	BOOL MoveTurret( void );
@@ -351,6 +378,7 @@ void CTFSentrygun::Precache( void )
 	PRECACHE_SOUND( TF_SND_TURRFIRE );
 	PRECACHE_SOUND( TF_SND_TURRROCKET );
 	UTIL_PrecacheOther( "tf_rpg_rocket" );
+	m_usBuildingEvent = PRECACHE_EVENT( 1, TF_EVENT_BUILDING );
 }
 
 void CTFSentrygun::Spawn( void )
@@ -644,14 +672,16 @@ void CTFSentrygun::SentryRotate( void )
 {
 	SetSentryAnim( TURRET_ANIM_SCAN );
 	StudioFrameAdvance( 0 );
-	TF_BuildingFadeGlow( this );
+	DoDamageEffects( pev, pev->max_health * 0.66f, pev->max_health * 0.33f );
 
 	if ( gpGlobals->time > m_flNextCheck )
 	{
-		CheckBelowBuilding( TF_SENTRY_FALL_DIST );
+		if ( !CheckSentry() )
+			return;
 		m_flNextCheck = gpGlobals->time + TF_SENTRY_CHECK_WAIT;
 	}
 
+	TF_BuildingFadeGlow( this );
 	pev->nextthink = gpGlobals->time + TF_SENTRY_THINK;
 
 	if ( FindTarget() )
@@ -659,6 +689,12 @@ void CTFSentrygun::SentryRotate( void )
 
 	if ( MoveTurret() )
 		return;
+
+	// [tfc.so] the legs are what can fall; the gun stays put and CheckSentry notices
+	CBaseEntity *pBase = m_pOtherSection;
+	if ( pBase )
+		pBase->CheckBelowBuilding( TF_SENTRY_FALL_DIST );
+	TF_UpdateEntityEvents( this );
 
 	if ( RANDOM_FLOAT( 0, 1.0f ) < 0.1f )
 		EMIT_SOUND_DYN( ENT( pev ), CHAN_VOICE, TF_SND_TURRIDLE, 1.0f, 0.8f, 0, PITCH_NORM );
@@ -683,6 +719,7 @@ void CTFSentrygun::SentryRotate( void )
 void CTFSentrygun::Attack( void )
 {
 	StudioFrameAdvance( 0 );
+	DoDamageEffects( pev, pev->max_health * 0.66f, pev->max_health * 0.33f );
 	TF_BuildingFadeGlow( this );
 	pev->nextthink = gpGlobals->time + TF_SENTRY_THINK;
 
@@ -719,6 +756,39 @@ void CTFSentrygun::Attack( void )
 
 	Fire();
 	m_flNextAttack = gpGlobals->time + ( m_iLevel == 1 ? 0.2f : 0.1f );
+}
+
+// [tfc.so] the gun must still sit on its legs and outside every func_nobuild,
+// or it malfunctions and blows up.
+BOOL CTFSentrygun::CheckSentry( void )
+{
+	CBaseEntity *pBase = m_pOtherSection;
+	BOOL bOK = pBase && ( pev->origin - pBase->pev->origin ).Length() <= TF_SENTRY_BASE_DIST;
+
+	CBaseEntity *pArea = NULL;
+	while ( bOK && ( pArea = UTIL_FindEntityByClassname( pArea, "func_nobuild" ) ) != NULL )
+	{
+		const Vector &o = pev->origin;
+		if ( o.x >= pArea->pev->mins.x && o.y >= pArea->pev->mins.y && o.z >= pArea->pev->mins.z
+		     && o.x <= pArea->pev->maxs.x && o.y <= pArea->pev->maxs.y && o.z <= pArea->pev->maxs.z )
+			bOK = FALSE;
+	}
+
+	if ( bOK )
+		return TRUE;
+
+	CBaseEntity *pOwner = real_owner;
+	if ( pOwner && pOwner->IsPlayer() )
+	{
+		UTIL_ClientPrintAll( HUD_PRINTNOTIFY, "#Sentry_malfunc", STRING( pOwner->pev->netname ) );
+		UTIL_LogPrintf( "\"<-1><><>\" triggered \"Sentry_Malfunction\" against \"%s<%i><%s><%s>\"\n",
+		                STRING( pOwner->pev->netname ), GETPLAYERUSERID( pOwner->edict() ),
+		                GETPLAYERAUTHID( pOwner->edict() ),
+		                pOwner->team_no ? GetTeamName( pOwner->team_no ) : "SPECTATOR" );
+	}
+
+	Killed( NULL, NULL, GIB_NORMAL );
+	return FALSE;
 }
 
 void CTFSentrygun::Fire( void )
@@ -886,6 +956,7 @@ void CTFSentrygun::Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int 
 	pev->takedamage = DAMAGE_NO;
 	pev->solid = SOLID_NOT;
 	SetThink( NULL );
+	TF_RemoveEntityEvents( this );
 
 	if ( pBase )
 	{
@@ -935,6 +1006,7 @@ public:
 	int TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, float flDamage, int bitsDamageType );
 	void Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int iGib );
 	BOOL EngineerUse( CBasePlayer *pPlayer );
+	void TeamFortress_TakeEMPBlast( entvars_t *pevGren ) { TF_BuildingTakeEMP( this, pevGren ); }
 
 	void EXPORT DispenserThink( void );
 	void EXPORT BuildThink( void );
@@ -954,11 +1026,11 @@ LINK_ENTITY_TO_CLASS( building_dispenser, CTFDispenser )
 
 void CTFDispenser::Precache( void )
 {
-	PRECACHE_MODEL( TF_MDL_BASE );
 	PRECACHE_MODEL( TF_MDL_DISPENSER );
 	PRECACHE_MODEL( TF_MDL_COMPGIBS );
 	PRECACHE_SOUND( TF_SND_TURRSET );
 	PRECACHE_SOUND( TF_SND_AMMOPICKUP );
+	m_usBuildingEvent = PRECACHE_EVENT( 1, TF_EVENT_BUILDING );
 }
 
 void CTFDispenser::Spawn( void )
@@ -981,7 +1053,9 @@ void CTFDispenser::Spawn( void )
 	pev->angles.x = 0;
 	pev->angles.z = 0;
 
-	SET_MODEL( ENT( pev ), TF_MDL_BASE );
+	// [tfc.so] dispenser.mdl is worn from spawn, not base.mdl -- there is no
+	// separate legs entity like the sentry, the model's own sequence builds.
+	SET_MODEL( ENT( pev ), TF_MDL_DISPENSER );
 	UTIL_SetSize( pev, Vector( -16, -16, 0 ), Vector( 16, 16, 24 ) );
 
 	SetThink( &CTFDispenser::BuildThink );
@@ -1033,6 +1107,8 @@ void CTFDispenser::Finished( void )
 void CTFDispenser::DispenserThink( void )
 {
 	CheckBelowBuilding( TF_SENTRY_FALL_DIST );
+	TF_UpdateEntityEvents( this );
+	DoDamageEffects( pev, pev->max_health * 0.66f, pev->max_health * 0.33f );
 	TF_BuildingFadeGlow( this );
 
 	if ( gpGlobals->time > m_flNextRefillTime )
@@ -1196,6 +1272,7 @@ void CTFDispenser::Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int 
 	pev->solid = SOLID_NOT;
 	SetThink( NULL );
 	SetTouch( NULL );
+	TF_RemoveEntityEvents( this );
 
 	if ( pOwner && pOwner->IsPlayer() )
 	{
@@ -1277,6 +1354,22 @@ static void TF_BuildingEvent( CBaseEntity *pEnt, int iBits, int iTeam, int bOn )
 {
 	PLAYBACK_EVENT_FULL( FEV_RELIABLE | FEV_GLOBAL, pEnt->edict(), pEnt->m_usBuildingEvent, 0,
 	                     pEnt->pev->origin, g_vecZero, 0, 0, iBits, iTeam, bOn, 0 );
+}
+
+// [tfc.so] UpdateEntityEvents: the client's FX node follows a building that moved
+static void TF_UpdateEntityEvents( CBaseEntity *pEnt )
+{
+	if ( pEnt->pev->origin == pEnt->m_vOldOrigin )
+		return;
+
+	TF_BuildingEvent( pEnt, TELE_EV_MOVED, 0, 0 );
+	pEnt->m_vOldOrigin = pEnt->pev->origin;
+}
+
+static void TF_RemoveEntityEvents( CBaseEntity *pEnt )
+{
+	if ( pEnt->m_usBuildingEvent )
+		TF_BuildingEvent( pEnt, TELE_EV_REMOVE, 0, 0 );
 }
 
 // [tfc.so] sparks under 66% health, smoke too under 33%
@@ -1379,6 +1472,7 @@ public:
 	int TakeDamage( entvars_t *pevInflictor, entvars_t *pevAttacker, float flDamage, int bitsDamageType );
 	void Killed( entvars_t *pevInflictor, entvars_t *pevAttacker, int iGib );
 	BOOL EngineerUse( CBasePlayer *pPlayer );
+	void TeamFortress_TakeEMPBlast( entvars_t *pevGren ) { TF_BuildingTakeEMP( this, pevGren ); }
 
 	void EXPORT BuildThink( void );
 	void EXPORT TeleporterThink( void );
@@ -1419,7 +1513,7 @@ void CTFTeleporter::Precache( void )
 	PRECACHE_MODEL( TF_SPR_SHELL );
 	PRECACHE_MODEL( "sprites/particle.spr" );
 	m_iShardIndex = PRECACHE_MODEL( TF_MDL_COMPGIBS );
-	m_usBuildingEvent = PRECACHE_EVENT( 1, "events/misc/tf_buildingevent.sc" );
+	m_usBuildingEvent = PRECACHE_EVENT( 1, TF_EVENT_BUILDING );
 }
 
 void CTFTeleporter::Spawn( void )
@@ -2282,6 +2376,37 @@ void TeamFortress_EngineerStatusBar( CBasePlayer *pPlayer, char *sbuf0, char *sb
 		strcpy( sbuf1[0] ? sbuf0 : sbuf1, "#Engineer_building" );
 }
 
+// [tfc.so] crosshair-ID on a building: any player can read owner/health/armor
+// off it, friend or foe -- there is no ally gate, unlike the player-ID branch.
+BOOL TeamFortress_GetBuildingIDInfo( CBaseEntity *pEntity, char *sbuf2, int iSbuf2Size, int *piOwnerIndex, int *piHealthPct, int *piArmorPct )
+{
+	const char *pszTemplate;
+
+	if ( FClassnameIs( pEntity->pev, "building_sentrygun" ) )
+		pszTemplate = "1 Sentry gun built by: %p1\n2    Health: %i2%%\n3  Armor: %i3%%";
+	else if ( FClassnameIs( pEntity->pev, "building_dispenser" ) )
+		pszTemplate = "1 Dispenser built by: %p1\n2    Health: %i2%%\n3  Armor: %i3%%";
+	else if ( FClassnameIs( pEntity->pev, "building_teleporter" ) )
+		pszTemplate = ( (CTFTeleporter *)pEntity )->IsEntrance()
+			? "1 Teleporter entrance built by: %p1\n2    Health: %i2%%\n3  Armor: %i3%%"
+			: "1 Teleporter exit built by: %p1\n2    Health: %i2%%\n3  Armor: %i3%%";
+	else
+		return FALSE;
+
+	CBaseEntity *pOwner = (CBaseEntity *)pEntity->real_owner;
+	if ( !pOwner || !pOwner->IsPlayer() )
+		return FALSE;
+
+	strncpy( sbuf2, pszTemplate, iSbuf2Size );
+	sbuf2[iSbuf2Size - 1] = 0;
+
+	*piOwnerIndex = ENTINDEX( pOwner->edict() );
+	*piHealthPct  = TF_HealthPercent( pEntity );
+	*piArmorPct   = (int)pEntity->pev->armorvalue;
+
+	return TRUE;
+}
+
 // [tfc.so] dismantling hands back a flat 100 metal, whatever the building cost.
 void DestroyBuilding( CBaseEntity *eng, char *bld )
 {
@@ -2309,6 +2434,7 @@ void DestroyBuilding( CBaseEntity *eng, char *bld )
 		pBuilding->m_pOtherSection = NULL;
 	}
 
+	TF_RemoveEntityEvents( pBuilding );
 	pBuilding->real_owner = NULL;
 	pBuilding->pev->solid = SOLID_NOT;
 	pBuilding->SetThink( NULL );

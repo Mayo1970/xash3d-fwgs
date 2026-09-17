@@ -638,6 +638,13 @@ void CTFGrenade::PipebombDetonate( void )
 	TF_ProjExplode( this, &tr, m_usTFExplode, TRUE, 0.0f, pev->dmg, pev->dmg, DMG_BLAST | DMG_RADIUS_QUAKE );
 }
 
+// [tfc.so] an EMP sets off pipebombs 0.1 s later; GL grenades ignore it
+void CTFGrenade::TeamFortress_TakeEMPBlast( entvars_t *pevGren )
+{
+	if ( FClassnameIs( pev, "tf_gl_pipebomb" ) )
+		pev->nextthink = gpGlobals->time + 0.1f;
+}
+
 // bAll: every pipe old enough to be armed (bForceDetonation: every pipe);
 // otherwise just the oldest one. Detonation is a nextthink of now.
 void CBasePlayer::ExplodeOldPipebomb( BOOL bAll, BOOL bForceDetonation )

@@ -29,14 +29,8 @@ def remove_implib_install(self):
 
 @Configure.conf
 def get_taskgen_count(self):
-	# a build-wide (not per-path) taskgen counter, passed as idx= to force
-	# a unique output object filename -- needed by hlsdk-portable/dlls and
-	# hlsdk-portable/cl_dll, which both compile some of the same weapon
-	# .cpp files (server and client builds of the same source) from two
-	# different taskgen paths; without a shared global counter their
-	# default per-path idx values can collide and waf silently reuses one
-	# taskgen's compiled object for the other, dropping symbols the other
-	# build actually needs (see AGENTS.md goal 10 notes).
+	# Build-wide taskgen counter for idx=: hlsdk dlls and cl_dll compile the same weapon .cpp
+	# from two paths, and per-path idx values collide and share one object (AGENTS.md goal 10).
 	try: idx = self.tg_idx_count
 	except AttributeError: idx = 0
 	return idx
@@ -110,53 +104,29 @@ SUBDIRS = [
 	Subproject('3rdparty/bzip2',        lambda x: x.env.CLIENT and not x.env.HAVE_SYSTEM_BZ2),
 	Subproject('3rdparty/opus',         lambda x: x.env.CLIENT and not x.env.HAVE_SYSTEM_OPUS),
 	Subproject('3rdparty/opusfile',     lambda x: x.env.CLIENT and not x.env.HAVE_SYSTEM_OPUSFILE),
-	# Same whole-tree swap as the 'client'/'server' rows below, for the same
-	# reason. Counter-Strike's menu is Velaron's mainui_cpp fork at ba8802c: it
-	# is what implements IGameMenuExports / "GameMenuExports001", which
-	# cs16-client's cdll_int.cpp pulls through the engine's MenuFactory native
-	# object to drive the buy, team and class menus. Team Fortress Classic's
-	# menu is a *different* commit/branch of the same Velaron/mainui_cpp repo
-	# (489b8d1, branch tf15-client) -- confirmed via the GitHub API that this
-	# branch adds no GameMenuExports implementation at all (no interface.cpp,
-	# no menus/client/), so it is only there for parity with tf15-client's own
-	# pinned submodule (font backend tweaks, an sdk_includes sync, a
-	# ServerBrowser.cpp change), not a VGUI replacement -- that is TFC-5's job.
-	# Exactly one of these three supplies the waf name 'menu' that xshlib.py
-	# links.
+	# Exactly one row supplies waf name 'menu'. CS needs Velaron's fork (GameMenuExports001 drives
+	# buy/team/class menus); TFC's fork 489b8d1 only tracks tf15-client's submodule, no VGUI role.
 	Subproject('3rdparty/mainui',              lambda x: x.env.CLIENT and x.env.PS3_GAME not in ('cstrike', 'tfc')),
 	Subproject('3rdparty/mainui_cs',           lambda x: x.env.CLIENT and x.env.PS3_GAME == 'cstrike'),
 	Subproject('tf15-client/3rdparty/mainui_cpp', lambda x: x.env.CLIENT and x.env.PS3_GAME == 'tfc'),
 	Subproject('3rdparty/MultiEmulator',lambda x: x.env.CLIENT),
 	Subproject('hlsdk-portable/game_shared'),
-	# Exactly one of these supplies the waf name 'server'. Counter-Strike's
-	# server is ReGameDLL_CS, a separate SDK with its own game_shared/
-	# pm_shared/public/engine snapshots, so the cstrike flavor swaps the whole
-	# server tree the same way it swaps the client and the menu below. Team
-	# Fortress Classic's server is tf15-client/dlls, from the same tf15-client
-	# tree its (future) client will come from -- see the TFC comment above
-	# PS3_GAME_DEFINES.
-	Subproject('hlsdk-portable/dlls',   lambda x: x.env.PS3_GAME not in ('cstrike', 'tfc')),
+	# Exactly one row supplies waf name 'server': ReGameDLL_CS for cstrike, tf15-client/dlls for tfc,
+	# ricochet/dlls (Valve's ricochet/ merged onto hlsdk-portable) for ricochet.
+	Subproject('hlsdk-portable/dlls',   lambda x: x.env.PS3_GAME not in ('cstrike', 'tfc', 'ricochet')),
 	Subproject('regamedll/dlls',        lambda x: x.env.PS3_GAME == 'cstrike'),
 	Subproject('tf15-client/dlls',      lambda x: x.env.PS3_GAME == 'tfc'),
-	# Exactly one of these supplies the waf name 'client' that xshlib.py links
-	# in. Counter-Strike and Team Fortress Classic are each a separate SDK
-	# rather than an hlsdk-portable variant, so those flavors swap the whole
-	# client tree instead of gating hlsdk-portable's with a define. PS3_GAME
-	# is unset everywhere but a PS3 flavor build, so every other target keeps
-	# the hlsdk client. TFC-3: tf15-client/cl_dll landing here (instead of
-	# falling through to the stock hlsdk-portable client, as it did since
-	# TFC-1/2) is what makes the RENAME_COMDAT_GROUPS 'tfc' gate in
-	# xshlib.py's add_target() harmless-but-unneeded rather than load-bearing
-	# -- client and server now share tf15-client's own byte-identical class
-	# layouts instead of hlsdk-portable's divergent ones.
-	Subproject('hlsdk-portable/cl_dll',  lambda x: x.env.CLIENT and x.env.PS3_GAME not in ('cstrike', 'tfc')),
+	Subproject('ricochet/dlls',         lambda x: x.env.PS3_GAME == 'ricochet'),
+	# Exactly one row supplies waf name 'client'. CS, TFC and Ricochet swap the whole client tree;
+	# PS3_GAME is unset outside PS3 flavor builds, so everything else keeps the hlsdk client.
+	Subproject('hlsdk-portable/cl_dll',  lambda x: x.env.CLIENT and x.env.PS3_GAME not in ('cstrike', 'tfc', 'ricochet')),
 	Subproject('cs16-client/cl_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME == 'cstrike'),
-	# TFC-5: real classic VGUI1, linked into tf15-client/cl_dll's own
-	# 'client' target below via use= (not a --static-linking reloc module --
-	# see tf15-client/3rdparty/vgui_support/wscript's own comment for why).
-	Subproject('tf15-client/3rdparty/vgui_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME == 'tfc'),
-	Subproject('tf15-client/3rdparty/vgui_support', lambda x: x.env.CLIENT and x.env.PS3_GAME == 'tfc'),
+	# TFC-5 openvgui pair, linked into the TFC and Ricochet clients via use= (not a reloc module,
+	# see tf15-client/3rdparty/vgui_support/wscript). Ricochet's disc HUD is VGUI1 too.
+	Subproject('tf15-client/3rdparty/vgui_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME in ('tfc', 'ricochet')),
+	Subproject('tf15-client/3rdparty/vgui_support', lambda x: x.env.CLIENT and x.env.PS3_GAME in ('tfc', 'ricochet')),
 	Subproject('tf15-client/cl_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME == 'tfc'),
+	Subproject('ricochet/cl_dll',        lambda x: x.env.CLIENT and x.env.PS3_GAME == 'ricochet'),
 	Subproject('engine'), # keep latest for static linking
 ]
 
@@ -165,18 +135,8 @@ REFDLLS = [
 	RefDll('gl', True),
 ]
 
-# Per-flavor PS3 package identity, keyed by --gamedir. Each mod ships as its
-# own installable PKG with its own XMB entry, since PSL1GHT has no dlopen and
-# so no runtime mod switching is possible -- the flavor is a build-time choice.
-# Only the XMB/PKG identity below is per-flavor: every flavor resolves its
-# filesystem root to the same shared /dev_hdd0/data/xash3dfwgs (see
-# FS_DetermineRootDirectory), so valve/ isn't duplicated once per install and
-# each mod gamedir falls back to it via its liblist.gam fallback_dir key.
-# TITLE_ID must be exactly 9 characters -- LV2 rejects anything else.
-# The fourth field is the flavor's build directory: the stock build stays in
-# build/, every mod gets its own build_* so the two never share objects (they
-# compile the same sources with different -D flags, so a shared build dir
-# would hand one flavor the other's .o files).
+# Per-flavor PKG identity (no dlopen, so the mod is a build-time choice): title, 9-char TITLE_ID,
+# icon, build dir. All flavors share /dev_hdd0/data/xash3dfwgs; separate build dirs keep -D objects apart.
 PS3_FLAVORS = {
 	'valve':   ('Xash3D FWGS',                   'XASH10000', 'icons/hl1/ICON0.PNG', 'build'),
 	'bshift':  ('Xash3D FWGS (Blue Shift)',      'XASHBS000', 'icons/bs/ICON0.PNG',  'build_bs'),
@@ -186,61 +146,15 @@ PS3_FLAVORS = {
 	'tfc':     ('Xash3D FWGS (Team Fortress Classic)', 'XASHTF000', 'icons/tf/ICON0.PNG', 'build_tfc'),
 }
 
-# Game-code define per flavor. One vendored hlsdk-portable tree serves every
-# flavor -- there is no per-mod source tree -- so each mod's divergence from
-# base HL1 lives inline behind its own #ifdef and the valve build must stay
-# semantically identical to upstream master. BSHIFT covers the FWGS
-# hlsdk-portable `bshift` branch: item_armorvest/item_helmet, monster_rosenberg,
-# trigger_playerfreeze, env_warpball, monster_generic head tracking and the
-# blue HUD. Entity symbols these add go in dlls/exports_<gamedir>.txt, since
-# exports.txt is emitted as extern declarations and the valve link would fail
-# on names its own #ifdef'd-out sources never define.
-# OPFOR covers the FWGS hlsdk-portable `opforfixed` branch (Opposing Force).
-# Its gamedir -- and so its flavor key here -- is `gearbox`, the directory the
-# mod actually ships under; the define is named for the game, not the folder.
-# Unlike BSHIFT, most of Opposing Force is new source under dlls/gearbox/ and
-# cl_dll/gearbox/ rather than inline #ifdefs: those files are excluded from
-# every other flavor's glob in hlsdk-portable/{dlls,cl_dll}/wscript, since an
-# #ifdef inside them would still drag 57 files of gearbox entities into the
-# valve link.
-# RICOCHET has no game code yet: the flavor currently builds base HL1 sources
-# under the ricochet gamedir, which is enough to boot to the menu but not to
-# play. Ricochet is a total conversion (one disc weapon, no monsters) and its
-# source is Valve's own ricochet/ tree in ValveSoftware/halflife rather than an
-# hlsdk-portable branch, so landing it means following the shape of FWGS's dmc
-# branch -- mod code under {dlls,cl_dll}/ricochet/, HL-only sources excluded
-# from this flavor's glob, and a REPLACED rather than extended exports list.
-# CSTRIKE has deliberately NO entry here. Counter-Strike is not a variant of the
-# hlsdk-portable tree at all: its client is the separate cs16-client SDK and its
-# server is ReGameDLL_CS, so the flavor selects a whole different source tree
-# rather than gating this one, and a define here would gate nothing. That swap
-# has landed for the client half -- see the two 'client' rows in SUBDIRS, which
-# pick cs16-client/cl_dll for this flavor and hlsdk-portable/cl_dll for every
-# other -- and for the menu, via the matching 'menu' pair that picks
-# 3rdparty/mainui_cs (Velaron's mainui_cpp fork, which implements
-# GameMenuExports001 and so the buy/team/class menus) over 3rdparty/mainui.
-# The server is still base HL1, so local play is HL1 rules, not CS.
-# TFC also has deliberately NO entry here, same reasoning as CSTRIKE: Team
-# Fortress Classic is a separate SDK (Velaron/tf15-client), not an
-# hlsdk-portable variant, so it swaps the whole client/server/menu source
-# trees rather than gating this one -- and unlike when this comment was first
-# written, that full swap has now landed: tf15-client/dlls (server, TFC-2),
-# tf15-client/cl_dll (client, TFC-3) and tf15-client/3rdparty/mainui_cpp
-# (menu, TFC-4) each supply their SUBDIRS row only when PS3_GAME == 'tfc',
-# same three-way shape as CSTRIKE above. TFC-5 (real classic VGUI1 -- team/
-# class select, HUD, scoreboard) has also now landed: the vgui_dll/
-# vgui_support pair above supplies it, linked into tf15-client/cl_dll's own
-# 'client' target rather than getting a fourth SUBDIRS row of its own.
+# #ifdef gates inside the shared hlsdk-portable tree (bshift, opforfixed as gearbox); extra entity
+# symbols go in dlls/exports_<gamedir>.txt. cstrike, tfc and ricochet swap whole trees instead.
 PS3_GAME_DEFINES = {
 	'bshift':   ['BSHIFT'],
 	'gearbox':  ['OPFOR'],
-	'ricochet': ['RICOCHET'],
 }
 
-# Build directory, derived from --gamedir so the stock and mod trees never
-# clobber each other. waf reads `out` when it loads this module, long before
-# options are parsed, so this has to read argv directly; an explicit -o/--out
-# still wins, since waf applies that afterwards.
+# Build dir from --gamedir; waf reads `out` before options are parsed, so read argv here.
+# An explicit -o/--out still wins.
 out = PS3_FLAVORS['valve'][3]
 for _i, _arg in enumerate(sys.argv[1:]):
 	_game = None
@@ -333,12 +247,8 @@ def configure(conf):
 	else:
 		conf.env.MSVC_TARGETS = ['x86']
 
-	# Load compilers early
-	# NOTE: xcompile must load before xshlib -- on cross targets (e.g. PS3)
-	# xcompile.configure() sets conf.environ['LD']/['OBJCOPY'] to the cross
-	# binutils, which xshlib.configure()'s conf.find_program('ld'/'objcopy')
-	# (used by --static-linking) needs to already be in place, or it silently
-	# falls back to the host's ld/objcopy.
+	# Load compilers early. xcompile must precede xshlib: it points LD/OBJCOPY at the cross binutils
+	# that xshlib's find_program needs, or --static-linking silently uses the host tools.
 	conf.load('xcompile xshlib compiler_c compiler_cxx')
 
 	if not conf.options.WAFCACHE:
@@ -398,27 +308,19 @@ def configure(conf):
 		conf.options.GLES3COMPAT      = True
 		conf.options.GL               = False
 	elif conf.env.DEST_OS == 'ps3':
-		# ref_gl runs on 3rdparty/ps3gl, a GL 1.1 fixed-function subset over the
-		# RSX. PSL1GHT still has no *runtime* shader compiler, but ps3gl doesn't
-		# need one: its Cg fragment/vertex programs are compiled offline with
-		# cgcomp and checked in. Same shape as PSVita/vitaGL -- see ref/gl/wscript.
-		# ref_soft stays enabled as the `-ref soft` fallback.
+		# ref_gl runs on 3rdparty/ps3gl (GL 1.1 over RSX, Cg programs precompiled with cgcomp).
+		# ref_soft stays available as the `-ref soft` fallback.
 		conf.options.GL               = True
-		# off by default: an unauthenticated UDP sender to a hardcoded dev IP
-		# has no business in a release build. --enable-ps3-udp-log opts in
-		# for dev/debug builds (see engine/platform/ps3/sys_ps3.c).
+		# Off by default: an unauthenticated UDP log to a hardcoded dev IP has no place in release builds
+		# (see engine/platform/ps3/sys_ps3.c).
 		conf.define_cond('XASH_PS3_UDP_LOG', conf.options.PS3_UDP_LOG)
 
 	# psvita needs -fPIC set manually and static builds are incompatible with -fPIC
 	enforce_pic = conf.env.DEST_OS != 'psvita' and not conf.env.STATIC_LINKING
 	conf.check_pic(enforce_pic)
 
-	# NOTE: We restrict 64-bit builds ONLY for Win/Linux running on Intel architecture
-	# Because compatibility with original GoldSrc
-	# NOTE: Since modern OSX (since Catalina) don't support 32-bit applications, there is no point
-	# to restrict them to 32-bit engine, despite GoldSrc is still officially supported.
-	# There is now `-4` (or `--32bits`) configure flag for those
-	# who want to specifically build engine for 32-bit
+	# 64-bit is restricted only on x86 Win/Linux for GoldSrc compatibility; macOS has no 32-bit apps.
+	# Use -4/--32bits to force a 32-bit engine.
 	if conf.env.DEST_OS in ['win32', 'linux'] and conf.env.DEST_CPU == 'x86_64':
 		force_32bit = not conf.options.ALLOW64
 	else:
@@ -430,9 +332,8 @@ def configure(conf):
 	cflags, linkflags = conf.get_optimization_flags()
 	cxxflags = list(cflags) # optimization flags are common between C and C++ but we need a copy
 
-	# on the Switch, allow undefined symbols by default, which is needed for libsolder to work
-	# we'll specifically disallow them for the engine executable
-	# additionally, shared libs are linked without standard libs, we'll add those back in the engine wscript
+	# Switch: libsolder needs undefined symbols in shared libs (the engine binary still forbids them);
+	# shared libs link without standard libs, the engine wscript adds them back.
 	if conf.env.DEST_OS == 'nswitch':
 		linkflags.remove('-Wl,--no-undefined')
 		conf.env.append_unique('LINKFLAGS_cshlib', ['-nostdlib', '-nostartfiles'])
@@ -549,14 +450,8 @@ def configure(conf):
 		conf.env.CFLAGS_werror = conf.filter_cflags(opt_flags + opt_cflags, cflags)
 		conf.env.CXXFLAGS_werror = conf.filter_cxxflags(opt_flags + opt_cxxflags, cxxflags)
 
-		# -Werror=format=2 turns on format-nonliteral as an error, which upstream
-		# hlsdk-portable trips in cl_dll/text_message.cpp (safe_snprintf is a plain
-		# snprintf off Win32 and is called with a runtime format string). The
-		# demotion is already in opt_flags, but filter_cxxflags does not reliably
-		# keep it under ppu-g++ 7.2 -- it survives the C filter and not the C++ one,
-		# so a fresh configure builds the C engine and then fails the C++ game DLLs.
-		# Re-append it wherever the promotion made it through, matching the intent
-		# the flag list already states.
+		# ppu-g++ 7.2's filter_cxxflags drops the format-nonliteral demotion, which hlsdk's text_message.cpp
+		# needs (runtime format string), so re-append it wherever format=2 survived.
 		for werror_flags in (conf.env.CFLAGS_werror, conf.env.CXXFLAGS_werror):
 			if '-Werror=format=2' in werror_flags and '-Wno-error=format-nonliteral' not in werror_flags:
 				werror_flags.append('-Wno-error=format-nonliteral')
@@ -616,14 +511,8 @@ def configure(conf):
 		if not conf.srcnode.find_node(conf.env.PS3_ICON0):
 			conf.fatal('PS3 icon \'%s\' not found in source tree' % conf.env.PS3_ICON0)
 
-		# XASH_GAMEDIR is the engine *basedir*, not the mod directory: host.c
-		# hands it to InitStdio as basedir, and searchpath.c only adds the base
-		# hierarchy when basedir differs from the gamefolder. Folding both into
-		# XASH_GAMEDIR drops valve/ out of the search path entirely, which costs
-		# you every shared asset -- localized menu strings included. So the mod
-		# goes through -game instead, exactly like `xash -game bshift` on PC,
-		# and the base stays valve. Every HL-family flavor shares that base; if
-		# a non-HL-based game is ever added, promote this to a table field.
+		# XASH_GAMEDIR is the engine basedir, not the mod dir: merging them drops valve/ from the search path.
+		# The mod goes through -game like `xash -game bshift`, and every HL-family flavor keeps valve as base.
 		conf.env.PS3_GAME = conf.env.GAMEDIR
 		conf.env.GAMEDIR = 'valve'
 		conf.define('XASH_PS3_GAME', conf.env.PS3_GAME)
@@ -660,10 +549,7 @@ def configure(conf):
 			conf.check_cc(lib='m')
 		# otherwise LIB_M is defined by xcompile (as it might be libm_hard, depending on NDK configuration)
 	elif conf.env.DEST_OS == 'win32':
-		# Common Win32 libraries
-		# Don't check them more than once, to save time
-		# Usually, they are always available
-		# but we need them in uselib
+		# Common Win32 libraries, checked once; always present but needed in uselib.
 		a = [ 'user32', 'shell32', 'gdi32', 'advapi32', 'dbghelp', 'psapi', 'ws2_32', 'bcrypt' ]
 		if conf.env.COMPILER_CC == 'msvc':
 			for i in a:
@@ -677,10 +563,8 @@ def configure(conf):
 		conf.check_cc(lib='dl', mandatory = False)
 		conf.check_cc(lib='m')
 
-	# hlsdk-portable/dlls and cl_dll fall back to external/openbsd/strlcpy.c
-	# and strlcat.c when the target libc doesn't provide them -- probe for
-	# real support instead of assuming, since PSL1GHT's libc is a partial
-	# newlib build with known gaps elsewhere (see AGENTS.md section 6).
+	# Probe strlcpy/strlcat instead of assuming: PSL1GHT's newlib is partial (AGENTS.md section 6),
+	# and the game trees fall back to external/openbsd when missing.
 	conf.env.HAVE_STRLCPY = conf.check_cc(
 		fragment='#include <string.h>\nint main(int argc, char **argv) { return strlcpy(argv[1], argv[2], 10); }',
 		msg='Checking for strlcpy', mandatory=False)
@@ -691,8 +575,7 @@ def configure(conf):
 	# set _FILE_OFFSET_BITS=64 for filesystems with 64-bit inodes
 	# must be set globally as it changes ABI
 	if conf.env.DEST_OS == 'android' and conf.env.DEST_SIZEOF_VOID_P == 4:
-		# Android in 32-bit mode don't have good enough large file support
-		# with our native API level
+		# 32-bit Android lacks usable large file support at our API level:
 		# https://android.googlesource.com/platform/bionic/+/HEAD/docs/32-bit-abi.md
 		pass
 	elif conf.env.DEST_OS == 'psvita':

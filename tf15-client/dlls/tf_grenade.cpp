@@ -45,7 +45,7 @@ extern int gmsgConcuss;
 #define TF_RADIUS_NORMAL    240.0f                 // ::RadiusDamage falloff = dmg/radius -> matches QWTF at dmg 120
 #define TF_DMG_MIRV_MAIN    90
 #define TF_DMG_MIRV_LET     70
-#define TF_DMG_EMP_BASE     45
+#define TF_EMP_RADIUS       240.0f   // [tfc.so] CTFEMPGrenade::setRadius
 
 #define TF_CONC_RADIUS      240.0f
 #define TF_CONC_STARTVAL    200      // client v_idlescale; -> ~+-60deg yaw sway
@@ -88,7 +88,7 @@ extern int gmsgConcuss;
 #define TF_CALTROP_TOSS     200.0f   // the can is lobbed backwards, low, at the feet
 #define TF_LEG_MAX          6.0f
 
-static unsigned short g_usTFConc, g_usTFNormal, g_usTFGas, g_usTFEmp, g_usTFEmpBlast;
+static unsigned short g_usTFConc, g_usTFNormal, g_usTFGas, g_usTFEmp;
 static unsigned short g_usTFFire, g_usTFBurn, g_usTFMirvMain, g_usTFMirvLet;
 static unsigned short g_usTFNailBlast, g_usTFNailSpray;
 
@@ -329,7 +329,6 @@ void CTFTossGrenade::Precache( void )
 	g_usTFNormal    = PRECACHE_EVENT( 1, "events/explode/tf_normalgren.sc" );
 	g_usTFGas       = PRECACHE_EVENT( 1, "events/explode/tf_gas.sc" );
 	g_usTFEmp       = PRECACHE_EVENT( 1, "events/explode/tf_emp.sc" );
-	g_usTFEmpBlast  = PRECACHE_EVENT( 1, "events/explode/tf_engrgren.sc" );
 	g_usTFFire      = PRECACHE_EVENT( 1, "events/explode/tf_fire.sc" );
 	g_usTFBurn      = PRECACHE_EVENT( 1, "events/explode/tf_burn.sc" );
 	g_usTFMirvMain  = PRECACHE_EVENT( 1, "events/explode/tf_mirvmain.sc" );
@@ -655,43 +654,95 @@ void CTFNapalmGrenade::Detonate2( void )
 	pev->nextthink = gpGlobals->time;
 }
 
+// [tfc.so] CTFEMPGrenade::Explode deals no damage itself. Everything in range reacts
+// through TeamFortress_TakeEMPBlast, and the ammo it carries is what explodes.
 void CTFEmpGrenade::Detonate2( void )
 {
-	Vector       org      = pev->origin;
-	entvars_t   *pevAtk   = TF_GrenOwner( this );
-	CBaseEntity *pThrower = pev->owner ? CBaseEntity::Instance( pev->owner ) : NULL;
+	Vector org = pev->origin;
 	TF_DiagG( "[tfc] detonate cls=%s (emp)\n", STRING( pev->classname ) );
 
 	pev->model = iStringNull;
 	pev->solid = SOLID_NOT;
-	TF_PlayFX( edict(), FXEvent(), org );      // shockwave ring + emp_1.wav
-	TF_PlayFX( edict(), g_usTFEmpBlast, org ); // and the explosion itself
-	::RadiusDamage( org, pev, pevAtk, TF_DMG_EMP_BASE, TF_RADIUS_NORMAL, CLASS_NONE, DMG_BLAST );
+	TF_PlayFX( edict(), FXEvent(), org );
 
-	CBaseEntity *v[32];
-	int n = TF_GatherPlayers( edict(), org, TF_RADIUS_NORMAL, pThrower, true, true, v, 32 );
-	for ( int i = 0; i < n; i++ )
-	{
-		CBasePlayer *pl = (CBasePlayer *)v[i];
-		int cooked = pl->ammo_shells + pl->ammo_cells * 2 + pl->ammo_rockets * 3 + pl->ammo_nails / 2;
-		if ( cooked <= 0 )
-			continue;
-
-		// destroy half the volatile ammo, damage scaled by what went off
-		pl->ammo_shells  -= pl->ammo_shells  / 2;
-		pl->ammo_cells   -= pl->ammo_cells   / 2;
-		pl->ammo_rockets -= pl->ammo_rockets / 2;
-		pl->ammo_nails   -= pl->ammo_nails   / 4;
-
-		float dmg = cooked * 0.35f;
-		if ( dmg > 120.0f )
-			dmg = 120.0f;
-		pl->TakeDamage( pev, pevAtk, dmg, DMG_BLAST );
-	}
+	CBaseEntity *pEnt = NULL;
+	while ( ( pEnt = UTIL_FindEntityInSphere( pEnt, org, TF_EMP_RADIUS ) ) != NULL )
+		pEnt->TeamFortress_TakeEMPBlast( pev );
 
 	pev->effects |= EF_NODRAW;
 	SetThink( &CBaseEntity::SUB_Remove );
 	pev->nextthink = gpGlobals->time + 0.1f;
+}
+
+// [tfc.so] the carried ammo is the blast; a hidden entity carries nothing
+void CBaseEntity::TeamFortress_CalcEMPDmgRad( float &dmg, float &rad )
+{
+	if ( pev->effects & EF_NODRAW )
+	{
+		dmg = rad = 0;
+		return;
+	}
+
+	dmg = rad = ammo_shells * 0.75f + ammo_rockets * 1.5f + ammo_cells * 1.5f;
+}
+
+// [tfc.so] blast centred on this entity, credited to the grenade's thrower
+void CBaseEntity::TeamFortress_EMPExplode( entvars_t *pevGren, float damage, float radius )
+{
+	entvars_t *pevAttacker = VARS( pevGren->owner ? pevGren->owner : INDEXENT( 0 ) );
+
+	int iScale = (int)( damage * 0.75f );
+	if ( iScale > 255 )
+		iScale = 255;
+	else if ( iScale <= 4 )
+		iScale = 5;
+
+	::RadiusDamage( pev->origin, pevGren, pevAttacker, damage, radius, CLASS_NONE, DMG_BLAST | DMG_RADIUS_QUAKE );
+
+	MESSAGE_BEGIN( MSG_PAS, SVC_TEMPENTITY, pev->origin );
+		WRITE_BYTE( TE_EXPLOSION );
+		WRITE_COORD( pev->origin.x );
+		WRITE_COORD( pev->origin.y );
+		WRITE_COORD( pev->origin.z );
+		WRITE_SHORT( g_sModelIndexFireball );
+		WRITE_BYTE( iScale );
+		WRITE_BYTE( 15 );
+		WRITE_BYTE( TE_EXPLFLAG_NOADDITIVE | TE_EXPLFLAG_NODLIGHTS );
+	MESSAGE_END();
+}
+
+// [tfc.so] an engineer's metal is not volatile: cells are neither counted nor lost
+void CBasePlayer::TeamFortress_CalcEMPDmgRad( float &damage, float &radius )
+{
+	float flDmg = ammo_shells * 0.75f + ammo_rockets * 1.5f;
+	if ( pev->playerclass != PC_ENGINEER )
+		flDmg += ammo_cells * 1.5f;
+
+	damage = radius = flDmg;
+}
+
+// [tfc.so] a quarter (rounded up) of the volatile ammo cooks off. The thrower is always
+// hit; other allies only when mp_teamplay lacks TEAMPLAY_NOEXPLOSIVE.
+void CBasePlayer::TeamFortress_TakeEMPBlast( entvars_t *pevGren )
+{
+	CBaseEntity *pAttacker = CBaseEntity::Instance( pevGren->owner ? pevGren->owner : INDEXENT( 0 ) );
+
+	if ( !pev->playerclass )
+		return;
+
+	if ( ( (int)gpGlobals->teamplay & TEAMPLAY_NOEXPLOSIVE ) && IsAlly( pAttacker ) && pAttacker != this )
+		return;
+
+	float flDmg, flRad;
+	TeamFortress_CalcEMPDmgRad( flDmg, flRad );
+
+	ammo_shells  -= (int)ceil( ammo_shells * 0.25 );
+	ammo_rockets -= (int)ceil( ammo_rockets * 0.25 );
+	if ( pev->playerclass != PC_ENGINEER )
+		ammo_cells -= (int)ceil( ammo_cells * 0.25 );
+
+	if ( flDmg > 0 )
+		TeamFortress_EMPExplode( pevGren, flDmg, flRad );
 }
 
 void CTFMirvGrenade::Detonate2( void )

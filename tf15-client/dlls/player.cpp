@@ -1960,6 +1960,19 @@ void CBasePlayer::UpdateStatusBar()
 
 				m_flStatusBarDisappearDelay = gpGlobals->time + 1.0f;
 			}
+			else
+			{
+				int iOwnerIndex, iHealthPct, iArmorPct;
+
+				if( TeamFortress_GetBuildingIDInfo( pEntity, sbuf2, sizeof( sbuf2 ), &iOwnerIndex, &iHealthPct, &iArmorPct ) )
+				{
+					newSBarState[SBAR_ID_TARGETNAME]   = iOwnerIndex;
+					newSBarState[SBAR_ID_TARGETHEALTH] = iHealthPct;
+					newSBarState[SBAR_ID_TARGETARMOR]  = iArmorPct;
+
+					m_flStatusBarDisappearDelay = gpGlobals->time + 1.0f;
+				}
+			}
 		}
 		else if( m_flStatusBarDisappearDelay > gpGlobals->time )
 		{

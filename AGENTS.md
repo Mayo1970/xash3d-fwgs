@@ -2195,9 +2195,10 @@ configure fails loudly on an unknown gamedir, a `TITLE_ID` that isn't exactly
 ./waf configure --ps3 --gamedir=tfc --static-linking=...      # tfc     -> XASHTF000, build_tfc/
 ```
 
-`ricochet` currently carries **no game code of its own** -- it builds base HL1
-sources under its own gamedir, which boots to the menu but is not the mod. Its
-path forward is described with `RICOCHET` in `PS3_GAME_DEFINES`.
+`ricochet` swaps whole source trees like `cstrike`/`tfc`: `name='server'` is
+`ricochet/dlls`, `name='client'` is `ricochet/cl_dll` (linked with TFC-5's
+`tf15-client/3rdparty/{vgui_dll,vgui_support}` pair), and the menu stays the
+stock `3rdparty/mainui`. See "Ricochet flavor" (RC-2) below.
 
 `cstrike` is different in kind. Counter-Strike is not an hlsdk-portable variant,
 so the flavor **swaps whole source trees** instead of gating one with a define.
@@ -4073,6 +4074,39 @@ Goal ladder:
     prematch, detpack. User widened it (2026-09-16) to also take teleporters
     and the Phase 4 polish (EMP-vs-building, mortar, damage smoke,
     `CheckSentry`). Split into 5a goals / 5b detpack + teleporters / 5c polish.
+      - **5c -- polish. WRITTEN 2026-09-17 from tfc.so, host-clang syntax +
+        link clean, NOT built for PS3, NOT HW-tested.**
+        - **EMP, whole chain replaced.** `CTFEMPGrenade::Explode` deals no
+          damage itself: it calls `TeamFortress_TakeEMPBlast(pevGren)` on
+          every entity within 240 u. The old hand-written player "cook" in
+          `tf_grenade.cpp` was invented and is gone. Real overrides: player
+          (a quarter of shells/rockets/cells, rounded up, cooks off;
+          engineer cells are exempt; blast = shells*0.75 + rockets*1.5
+          (+ cells*1.5) through `TeamFortress_EMPExplode` =
+          `DMG_BLAST|DMG_RADIUS_QUAKE` + a `TE_EXPLOSION`), sentry,
+          dispenser and teleporter (flat 200 `DMG_BLAST` through their own
+          `TakeDamage`), pipebombs (detonate 0.1 s later), detpack (already
+          done in 5b). Everything else is a no-op in retail: hand grenades,
+          GL grenades, rockets, items. `CItem::TeamFortress_EMPRemove` and
+          `CTFPrimeGrenade::TakeEMPBlast` have no callers in tfc.so.
+          `CWeaponBox`'s override was skipped: nothing in this tree fills a
+          box's `ammo_*`, so it would always be a no-op.
+        - **The old note "the sentry's EMP damage scales with its shells and
+          rockets" was WRONG.** It is a flat 200.
+        - **Mortar: nothing to port.** `Menu_EngineerFix_Mortar` is a bare
+          `ret` in tfc.so and `_Input` only resets the menu state. Retail TFC
+          has no engineer mortar.
+        - **`DoDamageEffects` + `UpdateEntityEvents`** now also run on the
+          sentry (`SentryRotate`, `Attack`) and the dispenser
+          (`DispenserThink`). Both now precache `tf_buildingevent.sc` (it was
+          the teleporter only) and send the 0x400 remove event from `Killed`
+          and from a dismantle.
+        - **`CTFSentrygun::CheckSentry`**, every 3 s from `SentryRotate`: the
+          gun malfunctions (`#Sentry_malfunc` to all, log line,
+          `Killed(NULL, NULL, 0)`) if it is more than 24 u from its legs or
+          its origin is inside a `func_nobuild`'s `mins`/`maxs`. As in
+          retail, the fall check now runs on the LEGS (only while the gun is
+          idle), not on the gun.
       - **5b -- detpack + teleporters. HW-VALIDATED 2026-09-17** (user: "it
         worked").
       - **5a -- goals, flags, map entities. HW-VALIDATED 2026-09-16** (user:
@@ -4138,6 +4172,58 @@ Goal ladder:
   ceiling during precache (nine player classes' worth of models/sounds vs
   CS's simpler roster) and the same `XASH_64BIT` / dead-`build.h`-snapshot
   check CS needed if tf15-client also fails to include a real `build.h`.
+
+
+### Ricochet flavor (`--gamedir=ricochet`, XASHRC000, `build_ricochet/`)
+
+- **RC-1 identity -- HARDWARE-VALIDATED 2026-08-04.** Boots to the menu with
+  base HL1 code under `-game ricochet`.
+- **RC-2 game code -- WRITTEN 2026-09-17, NOT BUILT, awaiting the user's build
+  and hardware test.** Repo-root `ricochet/` is its own tree, not `#ifdef`
+  gates (the gating generator's unbalanced-conditional flaw is gone with it):
+  - Source: `ValveSoftware/halflife` at `82ebce2` (pre-HL25), `ricochet/`
+    3-way merged against that commit's `dlls/`/`cl_dll/`/`pm_shared/` as base
+    and `hlsdk-portable/` (BSHIFT/OPFOR stripped) as ours. The 2024 Valve
+    fix `a4fe2cb` only touches `sound.cpp`'s texture init, which ours already
+    replaces with `PM_FindTextureType`.
+  - Server: merged files; Valve's versions taken whole where Ricochet rewrote
+    them (`player.cpp/.h`, `weapons.cpp/.h`, `multiplay_gamerules.cpp`,
+    `observer.cpp`, the stripped monster headers). `extdll.h`, `util.h`
+    (64-bit `MAKE_STRING`, `FIELD_FUNCTION` size) and `cbase.*` stay
+    hlsdk-portable. `GetNewDLLFunctions` (OnFreeEntPrivateData,
+    ShouldCollide) is exported. `game_shared/voice_gamemgr.cpp` is compiled
+    because the Ricochet rules use `CVoiceGameMgr` unconditionally.
+    `exports.txt` = 4 API names + 148 entities (taken from the preprocessor,
+    `trip_beam` is `#if`'d out).
+  - Client: hlsdk-portable's client with `USE_VGUI=1` as the base, plus
+    Ricochet's own `view.cpp` (chase cam), `StudioModelRenderer`/
+    `GameStudioModelRenderer`, `ev_hldm`, `hl/*`, `Ricochet_JumpPads`,
+    `vgui_discobjects`. Hand-ported additions: StartRnd/EndRnd/Powerup/
+    Reward/Frozen hooks and viewport handlers, `g_iArenaMode`, disc icons in
+    `paintBackground`, hidden ammo/battery/flashlight HUD, freeze icon,
+    locked-spectator look block (also in `input_xash3d.cpp`), render-state
+    hack in `entity.cpp`. VGUI sources come from upstream hlsdk-portable.
+  - Big-endian: `Ricochet_LoadEntityLump` assembled the BSP header with a raw
+    `memcpy`; it now reads each field little-endian and bounds-checks the
+    entity lump. It also loads `maps/x.bsp` game-relative instead of
+    `gamedir/maps/x.bsp`, and a pad with no target no longer derefs NULL.
+  - Real bug the syntax check could not see: Valve's `CBasePlayer::GiveAmmo(
+    int, char*, int)` did not override hlsdk-portable's `const char*` virtual,
+    so every call through `CBaseEntity*` returned -1. Found with
+    `-Woverloaded-virtual`, fixed with `const`.
+  - Verification done: every server/client/pm_shared TU passes
+    `g++/gcc -fsyntax-only` in WSL Ubuntu 24.04 (gcc 13, LP64) with the
+    project's `-Werror=` set and no `-fpermissive`. Nothing was compiled to
+    objects or linked, so link errors (duplicate or missing symbols) and PPC
+    specifics are untested.
+  - `cl_lw` stays 0 on PS3, so client disc prediction never runs; jump pad
+    prediction and the Ricochet player animation still run every frame from
+    `HUD_PostRunCmd`.
+  - Data: the user stages the Steam `ricochet/` folder under
+    `/dev_hdd0/data/xash3dfwgs/ricochet/`.
+- **RC-3**: in-game hardware validation (disc throw/bounce, decapitation,
+  jump pads, arena rounds, powerups, scoreboard wins column, third-person
+  camera). Expect first-build link errors to fix before this.
 
 Not yet checked in detail: `particleman` (submodule, `USE_PARTICLEMAN`-gated
 across 6 files, skippable for v1, matches CS's optional-extras precedent).

@@ -1393,12 +1393,3 @@ CBaseEntity *CBaseEntity::FindTimer( int iTimerType )
 void CBaseEntity::Timer_Infection()
 {
 }
-
-
-void CBaseEntity::TeamFortress_CalcEMPDmgRad( float &dmg, float &rad )
-{
-}
-
-void CBaseEntity::TeamFortress_EMPExplode( entvars_t *pevGren, float damage, float radius )
-{
-}

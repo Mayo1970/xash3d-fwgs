@@ -234,15 +234,8 @@ public:
 	virtual void Holster( int skiplocal = 0 );
 	virtual BOOL UseDecrement( void )
 	{
-		// TFC-6 Phase 1: the wpn_shared/tf_wpn_* weapons are written purely for
-		// the relative "decrement" timer model -- every Reload()/WeaponIdle()/
-		// weapon-switch check compares m_flNextPrimaryAttack & friends against
-		// 0.0f, and UTIL_WeaponTimeBase() returns 0 under CLIENT_WEAPONS. Those
-		// timers only get decremented when UseDecrement() is TRUE (client:
-		// com_weapons.cpp; server: player.cpp PostThink). The old
-		// `return FALSE` left firing half-working (CanAttack falls back to an
-		// absolute compare) but reload / idle / switching permanently gated.
-		// Same pattern CHandGrenade already uses.
+		// tf_wpn_* timers are relative (checked against 0) and only tick when this is TRUE;
+		// FALSE left reload, idle and weapon switch gated forever. Same as CHandGrenade.
 #if defined( CLIENT_WEAPONS )
 		return TRUE;
 #else
@@ -349,10 +342,7 @@ extern MULTIDAMAGE gMultiDamage;
 #define VECTOR_CONE_15DEGREES Vector( 0.13053, 0.13053, 0.13053 )
 #define VECTOR_CONE_20DEGREES Vector( 0.17365, 0.17365, 0.17365 )
 
-//=========================================================
-// CWeaponBox - a single entity that can store weapons
-// and ammo.
-//=========================================================
+// CWeaponBox - a single entity that can store weapons and ammo.
 class CWeaponBox : public CBaseEntity
 {
 	void Precache( void );
@@ -1016,6 +1006,9 @@ public:
 	void EXPORT PipebombTouch( CBaseEntity *pOther );
 	void EXPORT GLDetonate( void );
 	void EXPORT PipebombDetonate( void );
+#ifndef CLIENT_DLL
+	void TeamFortress_TakeEMPBlast( entvars_t *pevGren );
+#endif
 
 	static CTFGrenade *CreateTFGrenade( Vector vecOrigin, Vector vecAngles, CBaseEntity *pOwner );
 	static CTFGrenade *CreateTFPipebomb( Vector vecOrigin, Vector vecAngles, CBaseEntity *pOwner );

@@ -1285,6 +1285,7 @@ void TeamFortress_ProjectileThink( CBasePlayer *pPlayer );
 // TFC-6 Phase 4 -- engineer buildings (tf_building.cpp) + spy (tf_spy.cpp)
 void TeamFortress_SendBuildState( CBasePlayer *pPlayer );
 void TeamFortress_EngineerStatusBar( CBasePlayer *pPlayer, char *sbuf0, char *sbuf1, int *piAmmoPct );
+BOOL TeamFortress_GetBuildingIDInfo( CBaseEntity *pEntity, char *sbuf2, int iSbuf2Size, int *piOwnerIndex, int *piHealthPct, int *piArmorPct );
 BOOL TeamFortress_BuildCommand( CBasePlayer *pPlayer, const char *pcmd );
 void TeamFortress_SpyThink( CBasePlayer *pPlayer );
 BOOL TeamFortress_SpyCommand( CBasePlayer *pPlayer, const char *pcmd );
