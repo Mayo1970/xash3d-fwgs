@@ -366,6 +366,9 @@ cmake-build-*
 # Some stuff of mine
 scripts/
 
+# Not ready yet
+ricochet/
+
 # AI-related stuff
 CLAUDE.md
 .claude/

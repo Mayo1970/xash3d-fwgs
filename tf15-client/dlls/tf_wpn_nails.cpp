@@ -897,7 +897,43 @@ void CBasePlayer::Ignite( entvars_t *pevInflictor, entvars_t *pevAttacker )
 	}
 }
 
+// [tfc.so] stock HL laser dot; the sniper's charge-aim UpdateSpot() derefs it every frame.
+LINK_ENTITY_TO_CLASS( laser_spot, CLaserSpot )
+
 CLaserSpot *CLaserSpot::CreateSpot( void )
 {
-	return 0;
+	CLaserSpot *pSpot = GetClassPtr( (CLaserSpot *)NULL );
+	pSpot->Spawn();
+	pSpot->pev->classname = MAKE_STRING( "laser_spot" );
+	return pSpot;
+}
+
+void CLaserSpot::Spawn( void )
+{
+	Precache();
+	pev->movetype = MOVETYPE_NONE;
+	pev->solid = SOLID_NOT;
+	pev->rendermode = kRenderGlow;
+	pev->renderfx = kRenderFxNoDissipation;
+	pev->renderamt = 255;
+	SET_MODEL( ENT( pev ), "sprites/laserdot.spr" );
+	UTIL_SetOrigin( pev, pev->origin );
+}
+
+void CLaserSpot::Precache( void )
+{
+	PRECACHE_MODEL( "sprites/laserdot.spr" );
+}
+
+void CLaserSpot::Suspend( float flSuspendTime )
+{
+	pev->effects |= EF_NODRAW;
+	SetThink( &CLaserSpot::Revive );
+	pev->nextthink = gpGlobals->time + flSuspendTime;
+}
+
+void CLaserSpot::Revive( void )
+{
+	pev->effects &= ~EF_NODRAW;
+	SetThink( NULL );
 }

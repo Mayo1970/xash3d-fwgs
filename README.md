@@ -123,6 +123,10 @@ changes were validated on real PS3 hardware.
   open-source homebrew SDK this port is built against.
 - [FWGS/library-suffix](https://github.com/FWGS/library-suffix) -- platform
   detection used by the build system.
+- [Velaron/tf15-client](https://github.com/Velaron/tf15-client) -- Team
+  Fortress Classic client/menu SDK this flavor is vendored from.
+- [Velaron/cs16-client](https://github.com/Velaron/cs16-client) -- Counter-
+  Strike 1.6 client/menu SDK this flavor is vendored from.
 
 ## Upstream projects (read-only reference, not edited here)
 

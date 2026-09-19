@@ -66,6 +66,25 @@ static const tf_class_info_t sTFClass[PC_LASTCLASS] =
 	TFCLASSROW( CIVILIAN ),    // PC_CIVILIAN
 };
 
+// [tfc.so] the weapon each TeamFortress_SetEquipment branch ends on, via
+// SwitchWeapon(). Without it the generic FShouldSwitchWeapon weight pick wins
+// and every class deploys the shotgun.
+static const char *sTFClassDefWeapon[PC_LASTCLASS] =
+{
+	NULL,                      // PC_UNDEFINED
+	"tf_weapon_ng",            // PC_SCOUT
+	"tf_weapon_sniperrifle",   // PC_SNIPER
+	"tf_weapon_rpg",           // PC_SOLDIER
+	"tf_weapon_gl",            // PC_DEMOMAN
+	"tf_weapon_superng",       // PC_MEDIC
+	"tf_weapon_ac",            // PC_HVYWEAP
+	"tf_weapon_flamethrower",  // PC_PYRO
+	"tf_weapon_tranq",         // PC_SPY
+	"tf_weapon_railgun",       // PC_ENGINEER
+	NULL,                      // PC_RANDOM
+	"tf_weapon_axe",           // PC_CIVILIAN (the umbrella)
+};
+
 // Always-on HW log: pfnServerPrint, since ALERT() is dropped at developer 0.
 // Remove the TF_DIAG calls once the loadout path is confirmed on hardware.
 static void TF_DIAG( const char *fmt, ... )
@@ -133,26 +152,26 @@ void TeamFortress_SendTeamMenu( CBasePlayer *pPlayer )
 	TeamFortress_ShowVGUIMenu( pPlayer, MENU_TEAM );
 }
 
-static int TeamFortress_TeamWithFewest( void )
+// [tfc.so] TeamFortress_TeamPutPlayerInTeam: random start, then the emptiest team
+// that is still under its info_tfdetect player cap (hunted: 1 Hunted, 5 assassins).
+static int TeamFortress_TeamWithFewest( CBasePlayer *pPlayer )
 {
-	int count[5] = { 0 };
+	int nTeams = (int)number_of_teams;
+	int best = (int)ceilf( RANDOM_FLOAT( 0, (float)nTeams ) );
+	int iMin = 33;
 
-	for ( int i = 1; i <= gpGlobals->maxClients; i++ )
+	if ( best == 0 )
+		best = nTeams;
+
+	for ( int t = 1; t <= nTeams; t++ )
 	{
-		CBaseEntity *pEnt = UTIL_PlayerByIndex( i );
-		if ( pEnt )
+		int n = TeamFortress_TeamGetNoPlayers( t ) - ( pPlayer->team_no == t );
+
+		if ( n < iMin && n < teammaxplayers[t] )
 		{
-			int t = ( (CBasePlayer *)pEnt )->team_no;
-			if ( t >= 1 && t <= 4 )
-				count[t]++;
-		}
-	}
-
-	int best = 1;
-	for ( int t = 2; t <= (int)number_of_teams; t++ )
-	{
-		if ( count[t] < count[best] )
+			iMin = n;
 			best = t;
+		}
 	}
 	return best;
 }
@@ -160,7 +179,19 @@ static int TeamFortress_TeamWithFewest( void )
 void TeamFortress_JoinTeam( CBasePlayer *pPlayer, int iTeam )
 {
 	if ( iTeam < 1 || iTeam > (int)number_of_teams )
-		iTeam = TeamFortress_TeamWithFewest();          // covers "jointeam 5" (auto)
+		iTeam = TeamFortress_TeamWithFewest( pPlayer );  // covers "jointeam 5" (auto)
+
+	// [tfc.so] TeamFortress_TeamSet: re-picking your own team is a no-op
+	if ( pPlayer->team_no > 0 && pPlayer->team_no == iTeam )
+		return;
+
+	if ( TeamFortress_TeamGetNoPlayers( iTeam ) >= teammaxplayers[iTeam] )
+	{
+		if ( pPlayer->team_no == 0 )
+			TeamFortress_ShowVGUIMenu( pPlayer, MENU_TEAM );
+		ClientPrint( pPlayer->pev, HUD_PRINTNOTIFY, "#Game_teamfull" );
+		return;
+	}
 
 	TF_DIAG( "[tfc] JoinTeam: team=%d (%s)\n", iTeam, GetTeamName( iTeam ) );
 
@@ -327,6 +358,12 @@ static void TeamFortress_GiveWeapons( CBasePlayer *pPlayer, int bits )
 		TF_DIAG( "[tfc]  %s -> carried %d->%d%s\n", pszCls, before, after,
 		         after > before ? "" : "  (AddPlayerItem refused)" );
 	}
+
+	// [tfc.so] every SetEquipment branch closes on SwitchWeapon( class default ).
+	int pc = pPlayer->pev->playerclass;
+
+	if ( pc > PC_UNDEFINED && pc < PC_LASTCLASS && sTFClassDefWeapon[pc] )
+		pPlayer->SwitchWeapon( sTFClassDefWeapon[pc] );
 }
 
 void TeamFortress_PlayerSpawn( CBasePlayer *pPlayer )
@@ -359,18 +396,35 @@ void TeamFortress_PlayerSpawn( CBasePlayer *pPlayer )
 	// [tfc.so] CBasePlayer::Spawn -> TeamFortress_SetSkin: class model + team colours
 	pPlayer->TeamFortress_SetSkin();
 
-	// No class yet: hold the player still and untouchable until they pick one.
-	// Phase 1 has no real observer camera; this is the minimal "wait here" state.
-	if ( pc < PC_SCOUT || pc >= PC_RANDOM )
+	// [tfc.so] cleared for every class at the head of SetEquipment; only the
+	// PC_UNDEFINED branch puts it back, which is what keeps a classless player
+	// from firing.
+	pPlayer->tfstate &= ~TFSTATE_RELOADING;
+
+	// [tfc.so] TeamFortress_SetEquipment's PC_UNDEFINED branch: no body, no model,
+	// 1 hp, nothing can target or hurt them, and TFSTATE_RELOADING blocks firing.
+	// MOVETYPE_NOCLIP (not NONE) is what retail uses -- SetSpeed pins maxspeed at 1.
+	// PC_CIVILIAN (11) sits above PC_RANDOM, so a plain `>= PC_RANDOM` wrongly made it classless.
+	if ( pc < PC_SCOUT || pc == PC_RANDOM || pc >= PC_LASTCLASS )
 	{
 		pPlayer->pev->takedamage = DAMAGE_NO;
 		pPlayer->pev->solid = SOLID_NOT;
-		pPlayer->pev->movetype = MOVETYPE_NONE;
+		pPlayer->pev->movetype = MOVETYPE_NOCLIP;
 		pPlayer->pev->effects |= EF_NODRAW;
-		pPlayer->pev->velocity = g_vecZero;
-		pPlayer->pev->maxspeed = 1;
-		pPlayer->m_iHideHUD |= ( HIDEHUD_WEAPONS | HIDEHUD_HEALTH );
+		pPlayer->pev->health = pPlayer->pev->max_health = 1;
+		pPlayer->pev->armortype = 0;
+		pPlayer->pev->armorvalue = 0;
+		pPlayer->maxarmor = 0;
+		pPlayer->armorclass = 0;
+		pPlayer->pev->flags = ( pPlayer->pev->flags & FL_PROXY ) | FL_CLIENT | FL_NOTARGET;
+		pPlayer->pev->waterlevel = 3;   // retail: keeps WaterMove off a bodiless player
+		pPlayer->tfstate |= TFSTATE_RELOADING;
+		pPlayer->TeamFortress_SetSpeed();
 		TeamFortress_SetupGrenades( pPlayer );   // clears counts + any primed state
+
+		// [tfc.so] SetEquipment tail: the whole HUD goes away, unless observing.
+		if ( pPlayer->pev->iuser1 == 0 )
+			pPlayer->m_iHideHUD |= HIDEHUD_ALL;
 		return;
 	}
 
@@ -710,7 +764,8 @@ BOOL TeamFortress_ClientCommand( CBasePlayer *pPlayer, const char *pcmd )
 	{
 		if ( pPlayer->team_no < 1 )
 			TeamFortress_ShowVGUIMenu( pPlayer, MENU_TEAM );
-		else if ( pPlayer->pev->playerclass < PC_SCOUT || pPlayer->pev->playerclass >= PC_RANDOM )
+		else if ( pPlayer->pev->playerclass < PC_SCOUT || pPlayer->pev->playerclass == PC_RANDOM
+		          || pPlayer->pev->playerclass >= PC_LASTCLASS )
 			TeamFortress_ShowVGUIMenu( pPlayer, MENU_CLASS );
 		else
 			pPlayer->UseSpecialSkill();

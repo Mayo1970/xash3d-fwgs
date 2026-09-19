@@ -322,7 +322,7 @@ public:
 	{
 		filterMaps.RemoveAll();
 		servers.RemoveAll();
-		serversRefreshTime = gpGlobals->time;
+		serversRefreshTime = EngFuncs::DoubleTime();
 	}
 
 	bool IsHavePassword( int line )
@@ -339,7 +339,7 @@ public:
 		filterMap = filterMap_t( mapname );
 	}
 
-	float serversRefreshTime;
+	double serversRefreshTime;
 	float filterPing;
 	char filterEmpty;
 	char filterFull;

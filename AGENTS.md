@@ -3288,8 +3288,9 @@ Goal ladder:
   hardware round with a second client actually attempting to connect, log
   captured live, before a next theory is worth chasing. Tracked as its own
   goal below (TFC-6) rather than reopening TFC-5.
-- **TFC-6, listen-server hosting is broken**: Phase 1 in progress
-  (2026-09-05). Two independent symptoms:
+- **TFC-6, listen-server hosting is broken**: **half A (6a) CLOSED and
+  HW-validated 2026-09-17 through Phase 5d; half B (6b) still open.** Two
+  independent symptoms:
 
   **6a. Host's own player never gets a real team/class.** The earlier "two
   tiny fixes" read (missing `gmsgVGUIMenu` send + missing `"special"` bind)
@@ -4074,8 +4075,38 @@ Goal ladder:
     prematch, detpack. User widened it (2026-09-16) to also take teleporters
     and the Phase 4 polish (EMP-vs-building, mortar, damage smoke,
     `CheckSentry`). Split into 5a goals / 5b detpack + teleporters / 5c polish.
-      - **5c -- polish. WRITTEN 2026-09-17 from tfc.so, host-clang syntax +
-        link clean, NOT built for PS3, NOT HW-tested.**
+      - **5d -- spawn parity. HW-VALIDATED 2026-09-17** (user: "everything is
+        working as intended"). **This closes TFC-6 half A: the from-scratch TFC
+        server reimplementation is playable and done.** Two user-reported bugs, both
+        read out of `CBasePlayer::TeamFortress_SetEquipment` (tfc.so 0xc4060):
+        - **Every class deployed the shotgun.** Retail's per-class branch ends
+          on `SwitchWeapon( <default> )`: scout ng, sniper sniperrifle, soldier
+          rpg, demoman gl, medic superng, hwguy ac, pyro flamethrower, spy
+          tranq, engineer railgun, civilian axe. Without that call the generic
+          `FShouldSwitchWeapon` weight pick decides, and the shotgun wins.
+          `CBasePlayer::SwitchWeapon(const char*)` was a dead decl in
+          `player.h` -- now implemented off tfc.so 0xc3c60 (match on
+          `ItemInfoArray[m_iId].pszName`, `CanDeploy` gate, `ResetAutoaim`,
+          holster + deploy; it does NOT touch `m_pLastItem`), plus a
+          `sTFClassDefWeapon[]` table in `tf_client.cpp`.
+        - **The classless "spectator" state was invented, not ported.** Retail's
+          `PC_UNDEFINED` branch: `SOLID_NOT`, **`MOVETYPE_NOCLIP`** (we had
+          `MOVETYPE_NONE`), `EF_NODRAW`, `health = max_health = 1`,
+          `takedamage 0`, armour/armourclass 0, `flags = (flags & FL_PROXY) |
+          FL_CLIENT | FL_NOTARGET`, `waterlevel = 3`, `tfstate |=
+          TFSTATE_RELOADING`, and `velocity 0` / `maxspeed 1` through
+          `TeamFortress_SetSpeed`. The SetEquipment tail then does
+          `m_iHideHUD |= HIDEHUD_ALL` when `playerclass == 0 && iuser1 == 0`
+          and `&= ~HIDEHUD_ALL` otherwise -- we hid only WEAPONS|HEALTH.
+          `TFSTATE_RELOADING` is cleared for every class at the head of
+          SetEquipment and only the undefined branch re-sets it; that is what
+          stops a classless player firing, so the clear must stay unconditional.
+          Retail does **not** call `StartObserver` for a classless player: its
+          only callers are `ClientCommand` and `StartDeathCam`.
+        - Retail zeroes `pev->modelindex` in SetEquipment, but `SetSkin` runs
+          after it in `Spawn` and re-sets the shared scout hull, so the zero is
+          transient -- do not port it (our SetSkin runs first).
+      - **5c -- polish. HW-VALIDATED 2026-09-17** (user: the HW tests work).
         - **EMP, whole chain replaced.** `CTFEMPGrenade::Explode` deals no
           damage itself: it calls `TeamFortress_TakeEMPBlast(pevGren)` on
           every entity within 240 u. The old hand-written player "cook" in

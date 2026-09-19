@@ -34,6 +34,9 @@
 #include "soundent.h"
 #include "gamerules.h"
 
+class CBasePlayer;
+BOOL ActivationSucceeded( CBaseEntity *Goal, CBasePlayer *AP, CBaseEntity *ActivatingGoal );
+
 #define MONSTER_CUT_CORNER_DIST		8 // 8 means the monster's bounding box is contained without the box of the node in WC
 
 Vector VecBModelOrigin( entvars_t *pevBModel );
@@ -2407,6 +2410,15 @@ CBaseEntity *CBaseMonster::BestVisibleEnemy( void )
 
 	while( pNextEnt != NULL )
 	{
+		// [tfc.so] a client must meet the monster's goal criteria (team_no etc) to be a target;
+		// hunted's team_no 3 turrets fire on assassins only.
+		if( pNextEnt->IsAlive() && ( pNextEnt->pev->flags & FL_CLIENT )
+		    && !ActivationSucceeded( this, (CBasePlayer *)pNextEnt, NULL ) )
+		{
+			pNextEnt = pNextEnt->m_pLink;
+			continue;
+		}
+
 		if( pNextEnt->IsAlive() )
 		{
 			if( IRelationship( pNextEnt) > iBestRelationship )

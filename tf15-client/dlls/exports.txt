@@ -106,6 +106,7 @@ item_longjump
 item_security
 item_sodacan
 item_suit
+laser_spot
 light
 light_environment
 light_spot

@@ -71,10 +71,10 @@ struct server_t
 	bool pending_info;
 
 	float prevPing;
-	float pingChangedTime;
+	double pingChangedTime;
 	int   prevNumcl;
-	float playersChangedTime;
-	float mapChangedTime;
+	double playersChangedTime;
+	double mapChangedTime;
 
 	server_t( netadr_t adr, const char *info, bool is_favorite, bool pending_info = false );
 	void UpdateData();
@@ -299,7 +299,7 @@ public:
 		const uint green = PackRGB( 64, 255, 64 );
 		const uint red = PackRGB( 255, 64, 64 );
 
-		float changedTime = 0.0f;
+		double changedTime = 0.0;
 		uint flashColor = green;
 
 		switch( column )
@@ -338,7 +338,7 @@ public:
 	{
 		filterMaps.RemoveAll();
 		servers.RemoveAll();
-		serversRefreshTime = gpGlobals->time;
+		serversRefreshTime = EngFuncs::DoubleTime();
 	}
 
 	bool IsHavePassword( int line )
@@ -355,7 +355,7 @@ public:
 		filterMap = filterMap_t( mapname );
 	}
 
-	float serversRefreshTime;
+	double serversRefreshTime;
 	float filterPing;
 	char filterEmpty;
 	char filterFull;
@@ -614,7 +614,7 @@ void CMenuGameListModel::AddServerToList( netadr_t adr, const char *info, bool i
 
 		if( !wasPending )
 		{
-			float now = EngFuncs::DoubleTime();
+			double now = EngFuncs::DoubleTime();
 
 			if( fabsf( servers[pos].ping - oldPing ) > 0.005f )
 			{

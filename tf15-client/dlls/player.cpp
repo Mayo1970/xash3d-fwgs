@@ -4665,10 +4665,43 @@ BOOL CBasePlayer::HasNamedPlayerItem( const char *pszItemName )
 	return FALSE;
 }
 
+// [tfc.so] CBasePlayer::SwitchWeapon(char const*): deploy a carried weapon by its
+// ItemInfo name. Was a dead decl here, so no class could pick its own default.
+BOOL CBasePlayer::SwitchWeapon( const char *szWeaponName )
+{
+	if( !szWeaponName )
+		return FALSE;
+
+	for( int i = 0; i < MAX_ITEM_TYPES; i++ )
+	{
+		for( CBasePlayerItem *pItem = m_rgpPlayerItems[i]; pItem; pItem = pItem->m_pNext )
+		{
+			const char *pszName = pItem->pszName();
+
+			if( !pszName || strcmp( pszName, szWeaponName ) )
+				continue;
+
+			if( !pItem->CanDeploy() )
+				return FALSE;
+
+			ResetAutoaim();
+
+			if( m_pActiveItem )
+				m_pActiveItem->Holster();
+
+			m_pActiveItem = pItem;
+			pItem->Deploy();
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
 //=========================================================
-// 
+//
 //=========================================================
-BOOL CBasePlayer::SwitchWeapon( CBasePlayerItem *pWeapon ) 
+BOOL CBasePlayer::SwitchWeapon( CBasePlayerItem *pWeapon )
 {
 	if( !pWeapon->CanDeploy() )
 	{
