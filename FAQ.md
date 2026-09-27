@@ -2,7 +2,7 @@
 
 **Q: How do I install the ports?**
 
-**A:** Place **valve** [Half Life](https://store.steampowered.com/app/70/HalfLife/) and then depending on what you need inside **/dev_hdd0/data/xash3dfwgs/** (folder name must be **lowercase**). **The valve folder is mandatory**.
+**A:** Place the folder named **valve** ( [Half Life](https://store.steampowered.com/app/70/HalfLife/) ) and then depending on what you need inside **/dev_hdd0/data/xash3dfwgs/** (folder name must be **lowercase**). **The valve folder is mandatory**.
 
 If you want to run [Opposing Force](https://store.steampowered.com/app/50/HalfLife_Opposing_Force/), you will also need to add **gearbox**
 
