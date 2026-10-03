@@ -265,9 +265,7 @@ extern float		gldepthmin, gldepthmax;
 #define r_numStatics	(r_stats.c_client_ents)
 #define Mod_AllowMaterials() (host_allow_materials->value && !FBitSet( gp_host->features, ENGINE_DISABLE_HDTEXTURES ))
 
-//
 // gl_backend.c
-//
 void GL_BackendStartFrame( void );
 void GL_BackendEndFrame( void );
 void GL_CleanUpTextureUnits( int last );
@@ -289,21 +287,15 @@ void GL_PushPolygonOffset( float factor, float units );
 void GL_PopPolygonOffset( void );
 void SCR_TimeRefresh_f( void );
 
-//
 // gl_beams.c
-//
 void CL_DrawBeams( int fTrans, BEAM *active_beams );
 
-//
 // gl_cull.c
-//
 qboolean R_CullModel( const cl_entity_t *e, const vec3_t absmin, const vec3_t absmax );
 qboolean R_CullBox( const vec3_t mins, const vec3_t maxs );
 int R_CullSurface( const msurface_t *surf, const gl_frustum_t *frustum, uint clipflags );
 
-//
 // gl_decals.c
-//
 void DrawSurfaceDecals( msurface_t *fa, qboolean single, qboolean reverse );
 float *R_DecalSetupVerts( decal_t *pDecal, msurface_t *surf, int texture, int *outCount );
 void DrawSingleDecal( decal_t *pDecal, msurface_t *fa );
@@ -311,15 +303,11 @@ void R_EntityRemoveDecals( model_t *mod );
 void DrawDecalsBatch( void );
 void R_ClearDecals( void );
 
-//
 // gl_draw.c
-//
 void R_Set2DMode( qboolean enable );
 void GL_UpdateTexture( int texnum, int cols, int rows, int width, int height, const byte *buffer, pixformat_t fmt );
 
-//
 // gl_image.c
-//
 void R_SetTextureParameters( void );
 gl_texture_t *R_GetTexture( unsigned int texnum );
 #define GL_LoadTextureInternal( name, pic, flags ) GL_LoadTextureFromBuffer( name, pic, flags, false )
@@ -344,9 +332,7 @@ qboolean R_SearchForTextureReplacement( char *out, size_t size, const char *mode
 void R_TextureReplacementReport( const char *modelname, int gl_texturenum, const char *foundpath );
 void R_ShowTextures( void );
 
-//
 // gl_rmain.c
-//
 void R_ClearScene( void );
 void R_LoadIdentity( void );
 void R_RenderScene( void );
@@ -364,10 +350,7 @@ void R_PopScene( void );
 void R_DrawFog( void );
 int CL_FxBlend( cl_entity_t *e );
 
-//
-//
 // gl_rsurf.c
-//
 void R_MarkLeaves( void );
 void R_DrawWorld( void );
 void R_DrawWaterSurfaces( void );
@@ -386,22 +369,16 @@ qboolean R_HasGeneratedVBO( void );
 void R_EnableVBO( qboolean enable );
 qboolean R_HasEnabledVBO( void );
 
-//
 // gl_rpart.c
-//
 void CL_DrawParticlesExternal( const ref_viewpass_t *rvp, qboolean trans_pass, float frametime );
 void CL_DrawParticles( double frametime, particle_t *cl_active_particles, float partsize );
 void CL_DrawTracers( double frametime, particle_t *cl_active_tracers );
 
 
-//
 // gl_sprite.c
-//
 void R_DrawSpriteModel( cl_entity_t *e );
 
-//
 // gl_studio.c
-//
 void R_StudioInit( void );
 studiohdr_t *R_StudioGetHeader( void );
 void R_StudioLerpMovement( cl_entity_t *e, double time, vec3_t origin, vec3_t angles );
@@ -421,16 +398,12 @@ void R_StudioSetDrawInterface( struct r_studio_interface_s *pDraw );
 void Mod_StudioLoadTextures( model_t *mod, void *data );
 void Mod_StudioUnloadTextures( void *data );
 
-//
 // gl_alias.c
-//
 void Mod_LoadAliasModel( model_t *mod, const void *buffer, qboolean *loaded );
 void R_DrawAliasModel( cl_entity_t *e );
 void R_AliasInit( void );
 
-//
 // gl_warp.c
-//
 void R_AddSkyBoxSurface( msurface_t *fa );
 void R_ClearSkyBox( void );
 void R_DrawSkyBox( void );
@@ -442,9 +415,7 @@ qboolean R_UploadRipples( texture_t *image );
 
 //#include "vid_common.h"
 
-//
 // renderer exports
-//
 qboolean R_Init( void );
 void R_Shutdown( void );
 void GL_SetupAttributes( int safegl );
@@ -478,16 +449,12 @@ void R_ClearAllDecals( void );
 byte *Mod_GetCurrentVis( void );
 void Mod_SetOrthoBounds( const float *mins, const float *maxs );
 
-//
 // gl_opengl.c
-//
 #define GL_CheckForErrors() GL_CheckForErrors_( __FILE__, __LINE__ )
 void GL_CheckForErrors_( const char *filename, const int fileline );
 const char *GL_ErrorString( int err ) RETURNS_NONNULL;
 
-//
 // gl_triapi.c
-//
 void TriRenderMode( int mode );
 void TriBegin( int mode );
 void TriEnd( void );
@@ -506,13 +473,7 @@ void TriGetMatrix( const int pname, float *matrix );
 void TriFogParams( float flDensity, int iFogSkybox );
 void TriCullFace( TRICULLSTYLE mode );
 
-/*
-=======================================================================
-
- GL STATE MACHINE
-
-=======================================================================
-*/
+// GL STATE MACHINE
 enum
 {
 	GL_OPENGL_110 = 0,		// base
@@ -637,9 +598,7 @@ extern glstate_t		glState;
 // move to engine
 extern glwstate_t		glw_state;
 
-//
 // helper funcs
-//
 static inline cl_entity_t *CL_GetEntityByIndex( int index )
 {
 	if( unlikely( index < 0 || index >= tr.max_entities || !tr.entities ))
@@ -703,9 +662,7 @@ static inline int GL_MaxTextureUnits( void )
 
 #define WORLDMODEL (tr.worldmodel)
 
-//
 // renderer cvars
-//
 extern convar_t	gl_texture_anisotropy;
 extern convar_t	gl_extensions;
 extern convar_t	gl_check_errors;
@@ -730,6 +687,7 @@ extern convar_t	gl_ps3_swizzle;
 extern convar_t	gl_ps3_mipmap;
 extern convar_t	gl_ps3_dump_dlight;
 extern convar_t	gl_ps3_dlight_probe;
+extern convar_t	gl_ps3_dlight_ring;
 #endif
 
 extern convar_t	r_lighting_ambient;
@@ -757,13 +715,9 @@ extern convar_t r_ripple_updatetime;
 extern convar_t r_ripple_spawntime;
 extern convar_t r_large_lightmaps;
 
-//
 // engine shared convars
-//
 
-//
 // engine callbacks
-//
 #include "crtlib.h"
 
 

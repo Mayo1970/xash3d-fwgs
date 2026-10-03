@@ -53,11 +53,8 @@ static separate_pass_t draw_details = { 0, -1 };
 static msurface_t		*skychain = NULL;
 static gllightmapstate_t	gl_lms;
 
-/* Perf-diagnostic counters, read by 3rdparty/ps3gl/ps3gl_main.c's telemetry
- * window (extern'd there) to test whether dynamic-light CPU cost is an
- * independent frame-time driver, separate from RSX flush count. Reset once
- * per frame in R_DrawWorld. r_dlight_surface_count is dlightframe-only (NOT
- * lightstyle-flicker surfaces), so it isolates dlight cost specifically. */
+/* Dlight CPU-cost counters for ps3gl's telemetry window, reset per frame in R_DrawWorld.
+ * r_dlight_surface_count counts dlit surfaces only, not lightstyle-flicker ones. */
 uint32_t r_dlight_surface_count = 0;
 uint32_t r_dlight_luxel_count = 0;
 
@@ -308,14 +305,7 @@ static void GL_BuildLightmapWater( model_t *mod, msurface_t *fa )
 	}
 }
 
-/*
-===============================
-GL_SetupFogColorForSurfaces
-
-every render pass applies new fog layer, resulting in wrong fog color
-recalculate fog color for current pass count
-===============================
-*/
+// every render pass applies a new fog layer, so recalculate the fog color for the pass count
 static void GL_SetupFogColorForSurfacesEx( int passes, float density, qboolean blend_lightmaps )
 {
 	if( !glState.isFogEnabled )
@@ -357,15 +347,7 @@ void GL_ResetFogColor( void )
 		pglFogfv( GL_FOG_COLOR, RI.fogColor );
 }
 
-/*
-================
-GL_SubdivideSurface
-
-Breaks a polygon up along axial 64 unit
-boundaries so that turbulent and sky warps
-can be done reasonably.
-================
-*/
+// Breaks a polygon up along axial 64 unit boundaries so that turbulent and sky warps can be done reasonably.
 void GL_SubdivideSurface( model_t *loadmodel, msurface_t *fa )
 {
 	vec3_t	verts[SUBDIVIDE_SIZE];
@@ -381,11 +363,6 @@ void GL_SubdivideSurface( model_t *loadmodel, msurface_t *fa )
 	SubdividePolygon_r( loadmodel, fa, fa->numedges, verts[0] );
 }
 
-/*
-================
-GL_BuildPolygonFromSurface
-================
-*/
 static int GL_BuildPolygonFromSurface( model_t *mod, msurface_t *fa )
 {
 	int		nColinElim = 0;
@@ -465,13 +442,7 @@ static int GL_BuildPolygonFromSurface( model_t *mod, msurface_t *fa )
 }
 
 
-/*
-===============
-R_TextureAnim
-
-Returns the proper texture for a given time and base texture, do not process random tiling
-===============
-*/
+// Returns the proper texture for a given time and base texture, do not process random tiling
 static texture_t *R_TextureAnim( texture_t *b )
 {
 	texture_t *base = b;
@@ -516,13 +487,7 @@ static texture_t *R_TextureAnim( texture_t *b )
 	return base;
 }
 
-/*
-===============
-R_TextureAnimation
-
-Returns the proper texture for a given time and surface
-===============
-*/
+// Returns the proper texture for a given time and surface
 static texture_t *R_TextureAnimation( msurface_t *s )
 {
 	texture_t	*base = s->texinfo->texture;
@@ -569,11 +534,6 @@ static texture_t *R_TextureAnimation( msurface_t *s )
 	return base;
 }
 
-/*
-===============
-R_AddDynamicLights
-===============
-*/
 static void R_AddDynamicLights( const msurface_t *surf, float sample_size, int smax, int tmax )
 {
 	const mextrasurf_t *info = surf->info;
@@ -673,13 +633,7 @@ static void R_AddDynamicLights( const msurface_t *surf, float sample_size, int s
 	}
 }
 
-/*
-=============================================================================
-
-  LIGHTMAP ALLOCATION
-
-=============================================================================
-*/
+// LIGHTMAP ALLOCATION
 static void LM_InitBlock( void )
 {
 	Atlas_Init( &gl_lms.atlas, BLOCK_SIZE );
@@ -743,11 +697,79 @@ static void LM_UploadDynamicBlock( void )
 	pglTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, BLOCK_SIZE, gl_lms.atlas.max_height, GL_RGBA, GL_UNSIGNED_BYTE, gl_lms.lightmap_buffer );
 }
 
+#if XASH_PS3
+// ps3gl writes uploads straight into VRAM and the RSX runs the frame after the swap, so one shared
+// dlight texture made every dlit draw sample the frame's LAST upload. Pages per frame-parity half:
+#define PS3_DLIGHT_RING_SLOTS 16
+
+static int ps3_dlight_ring[2][PS3_DLIGHT_RING_SLOTS];
+static qboolean ps3_dlight_ring_ok;
+static uint32_t ps3_dlight_ring_frame = 0xFFFFFFFFu;
+static int ps3_dlight_ring_next;
+
+static void R_InitDlightRingPS3( void )
+{
+	rgbdata_t r_image =
+	{
+		.width = BLOCK_SIZE_DEFAULT,
+		.height = BLOCK_SIZE_DEFAULT,
+		.type = PF_RGBA_32,
+		.flags = IMAGE_HAS_COLOR,
+		.size = BLOCK_SIZE_DEFAULT * BLOCK_SIZE_DEFAULT * 4
+	};
+	char name[32];
+
+	ps3_dlight_ring_ok = true;
+
+	for( int i = 0; i < 2; i++ )
+	{
+		for( int j = 0; j < PS3_DLIGHT_RING_SLOTS; j++ )
+		{
+			// update = false: later maps get the existing page back instead of a re-upload
+			Q_snprintf( name, sizeof( name ), "*dlight_ps3_%d_%d", i, j );
+			ps3_dlight_ring[i][j] = GL_LoadTextureFromBuffer( name, &r_image, TF_NOMIPMAP|TF_CLAMP|TF_ATLAS_PAGE, false );
+
+			if( !ps3_dlight_ring[i][j] )
+				ps3_dlight_ring_ok = false;
+		}
+	}
+}
+
+static int R_NextDlightTexturePS3( void )
+{
+	extern uint32_t ps3gl_frame_index( void );
+
+	if( !gl_ps3_dlight_ring.value || !ps3_dlight_ring_ok || BLOCK_SIZE != BLOCK_SIZE_DEFAULT )
+		return tr.dlightTexture;
+
+	const uint32_t frame = ps3gl_frame_index();
+
+	// this half was last sampled two frames ago, which ps3gl_begin_frame already fenced
+	if( frame != ps3_dlight_ring_frame )
+	{
+		ps3_dlight_ring_frame = frame;
+		ps3_dlight_ring_next = 0;
+	}
+	else if( ps3_dlight_ring_next == PS3_DLIGHT_RING_SLOTS )
+	{
+		// every page of this half is sampled by a recorded draw: drain the RSX, then reuse
+		pglFinish();
+		ps3_dlight_ring_next = 0;
+	}
+
+	return ps3_dlight_ring[frame & 1][ps3_dlight_ring_next++];
+}
+#endif
+
 static void LM_UploadBlock( qboolean dynamic )
 {
 	if( dynamic )
 	{
+#if XASH_PS3
+		GL_Bind( XASH_TEXTURE0, R_NextDlightTexturePS3( ));
+#else
 		GL_Bind( XASH_TEXTURE0, tr.dlightTexture );
+#endif
 		LM_UploadDynamicBlock();
 	}
 	else
@@ -773,14 +795,7 @@ static void LM_UploadBlock( qboolean dynamic )
 	}
 }
 
-/*
-=================
-R_BuildLightmap
-
-Combine and scale multiple lightmaps into the floating
-format in r_blocklights
-=================
-*/
+// Combine and scale multiple lightmaps into the floating format in r_blocklights
 static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qboolean dynamic )
 {
 	const mextrasurf_t *info = surf->info;
@@ -850,11 +865,6 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
 	}
 }
 
-/*
-=============
-R_DrawTriangleOutlines
-=============
-*/
 static void R_DrawTriangleOutlines( void )
 {
 	if( !gl_wireframe.value )
@@ -902,11 +912,6 @@ static void R_DrawTriangleOutlines( void )
 	pglEnable( GL_TEXTURE_2D );
 }
 
-/*
-================
-DrawGLPoly
-================
-*/
 static void DrawGLPoly( glpoly2_t *p, float xScale, float yScale )
 {
 	float sOffset, tOffset;
@@ -975,13 +980,7 @@ static void DrawGLPoly( glpoly2_t *p, float xScale, float yScale )
 		GL_SetupFogColorForSurfaces();
 }
 
-/*
-=============
-EmitWaterPolys
-
-Does a water warp on the pre-fragmented glpoly_t chain
-=============
-*/
+// Does a water warp on the pre-fragmented glpoly_t chain
 static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 {
 	float	waveHeight;
@@ -1060,13 +1059,7 @@ static void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples
 	GL_SetupFogColorForSurfaces();
 }
 
-/*
-================
-EmitWaterLightPolys
-
-Render water lightmaps
-================
-*/
+// Render water lightmaps
 static void EmitWaterLightPolys( msurface_t *warp, float soffset, float toffset, qboolean dynamic )
 {
 	const qboolean useQuads = FBitSet( warp->flags, SURF_DRAWTURB_QUADS );
@@ -1110,13 +1103,7 @@ static void EmitWaterLightPolys( msurface_t *warp, float soffset, float toffset,
 		pglEnd();
 }
 
-/*
-================
-DrawGLPolyChain
-
-Render lightmaps
-================
-*/
+// Render lightmaps
 static void DrawGLPolyChain( glpoly2_t *p, float soffset, float toffset, msurface_t *surf )
 {
 	const qboolean dynamic = soffset != 0.0f || toffset != 0.0f;
@@ -1168,11 +1155,6 @@ static qboolean R_HasLightmap( void )
 	return true;
 }
 
-/*
-================
-R_BlendLightmaps
-================
-*/
 static void R_BlendLightmaps( void )
 {
 	msurface_t	*newsurf = NULL;
@@ -1219,10 +1201,8 @@ static void R_BlendLightmaps( void )
 			GL_Bind( XASH_TEXTURE0, tr.lightmapTextures[i] );
 
 #if XASH_PS3
-			/* Same dump for the STATIC pass, which composites correctly on
-			 * hardware. It is the control: any field that differs between this
-			 * line and the "dlight blend pass" line below is a candidate cause,
-			 * and any field that matches is exonerated without a rebuild. */
+			/* Same dump for the static pass, the control: a field that differs from the "dlight blend
+			 * pass" line below is a candidate cause, and a matching one is exonerated. */
 			{
 				extern void ps3gl_log_draw_state( const char *tag );
 				static int ps3_static_state_logged = -1;
@@ -1246,26 +1226,8 @@ static void R_BlendLightmaps( void )
 	if( r_dynamic->value )
 	{
 #if XASH_PS3
-		/* Diagnostic isolation for the dynamic lightmap composite.
-		 *
-		 * Mode 1 is the original probe, and it moved THREE things at once:
-		 * ROP blending, the texenv, and the vertex color. On PS3GL the texenv
-		 * is not a combiner setting, it selects a different fragment program
-		 * (GL_MODULATE -> q3_fp_modulate `color * tex`, GL_REPLACE ->
-		 * q3_fp_replace `tex`), so "1 looks right, 0 looks wrong" implicates
-		 * all three equally and cannot single out the blend unit. Modes 2-4
-		 * each move exactly one, which is what makes the result attributable:
-		 *
-		 *   0  ship:  blend ZERO/SRC_COLOR + MODULATE + inherited color
-		 *   1  legacy probe: blend off + REPLACE + white
-		 *   2  blend off, everything else as shipped  -> fragment output alone
-		 *   3  blend on, REPLACE + white              -> ROP blend alone
-		 *   4  blend on, MODULATE, color forced white -> inherited color alone
-		 *
-		 * Mode 4 matters because DrawGLPolyChain issues no glColor of its own:
-		 * under GL_MODULATE the fragment program multiplies the atlas by
-		 * whatever color the preceding pass left in immediate-mode state, and
-		 * R_BlendLightmaps only resets it to white on the way OUT (below). */
+		/* Probe modes: 0 ship, 1 blend off+REPLACE+white, 2 blend off, 3 REPLACE+white, 4 white color.
+		 * 2-4 each move one thing (the texenv picks the FP here; DrawGLPolyChain inherits glColor). */
 		switch( (int)gl_ps3_dlight_probe.value )
 		{
 		case 1:
@@ -1344,11 +1306,8 @@ static void R_BlendLightmaps( void )
 		if( newsurf ) LM_UploadBlock( true );
 
 #if XASH_PS3
-		/* Log the state these draws actually composite under, once per probe
-		 * mode. Fires on the first frame that has dynamic surfaces (so mode 0
-		 * gets a baseline with no cvar set) and again on every mode change.
-		 * The field to read first is fp_key: it is the fragment program PS3GL
-		 * really selected, which is NOT always the one the texenv asked for. */
+		/* Log the composite state once per probe mode (mode 0 on the first dlit frame). Read fp_key
+		 * first: the fragment program PS3GL really picked, not always the one the texenv asked for. */
 		if( newsurf )
 		{
 			extern void ps3gl_log_draw_state( const char *tag );
@@ -1390,11 +1349,6 @@ static void R_BlendLightmaps( void )
 	GL_ResetFogColor();
 }
 
-/*
-================
-R_RenderFullbrights
-================
-*/
 static void R_RenderFullbrights( qboolean allow_vbo )
 {
 	if( !R_SeparatePassActive( &draw_fullbrights ))
@@ -1439,11 +1393,6 @@ static void R_RenderFullbrights( qboolean allow_vbo )
 	R_AllowFog( true );
 }
 
-/*
-================
-R_RenderDetails
-================
-*/
 static void R_RenderDetails( int passes )
 {
 	if( !R_SeparatePassActive( &draw_details ))
@@ -1621,11 +1570,6 @@ static void R_RenderLightmapForSurface( msurface_t *fa )
 	}
 }
 
-/*
-================
-R_RenderBrushPoly
-================
-*/
 static void R_RenderBrushPoly( msurface_t *fa, int cull_type )
 {
 	r_stats.c_world_polys++;
@@ -1655,11 +1599,6 @@ static void R_RenderBrushPoly( msurface_t *fa, int cull_type )
 	R_RenderLightmapForSurface( fa );
 }
 
-/*
-================
-R_DrawTextureChains
-================
-*/
 static void R_DrawTextureChains( void )
 {
 	// make sure what color is reset
@@ -1720,11 +1659,6 @@ static void R_DrawTextureChains( void )
 	}
 }
 
-/*
-================
-R_DrawAlphaTextureChains
-================
-*/
 void R_DrawAlphaTextureChains( void )
 {
 	if( !R_SeparatePassActive( &draw_alpha_surfaces ))
@@ -1772,11 +1706,6 @@ void R_DrawAlphaTextureChains( void )
 	pglAlphaFunc( GL_GREATER, DEFAULT_ALPHATEST );
 }
 
-/*
-================
-R_DrawWaterSurfaces
-================
-*/
 void R_DrawWaterSurfaces( void )
 {
 	if( !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ) || FBitSet( RI.rvp.flags, RF_ONLY_CLIENTDRAW ))
@@ -1835,13 +1764,7 @@ void R_DrawWaterSurfaces( void )
 	pglColor4ub( 255, 255, 255, 255 );
 }
 
-/*
-=================
-R_SurfaceCompare
-
-compare translucent surfaces
-=================
-*/
+// compare translucent surfaces
 static int R_SurfaceCompare( const void *a, const void *b )
 {
 	vec3_t		org1, org2;
@@ -1964,11 +1887,6 @@ static int R_SortBrushModelSurfaces( cl_entity_t *e, model_t *clmodel, vec3_t mi
 
 }
 
-/*
-=================
-R_DrawBrushModel
-=================
-*/
 void R_DrawBrushModel( cl_entity_t *e )
 {
 	vec3_t mins, maxs;
@@ -2094,18 +2012,9 @@ void R_DrawBrushModel( cl_entity_t *e )
 }
 
 
-/*
-==============================
+// VBO: build arrays (vboarray_t) for all map geometry on map load, store each surface's index
+// base (vbosurfdata_t), and build index arrays (vbotexture_t) for each texture every frame.
 
-VBO
-
-==============================
-*/
-/*
-Bulld arrays (vboarray_t) for all map geometry on map load.
-Store index base for every surface (vbosurfdata_t) to build index arrays
-For each texture build index arrays (vbotexture_t) every frame.
-*/
 // vertex attribs
 //#define NO_TEXTURE_MATRIX // need debug
 typedef struct vbovertex_s
@@ -2270,13 +2179,7 @@ qboolean R_HasEnabledVBO( void )
 	return vbos.enabled;
 }
 
-/*
-===================
-R_GenerateVBO
-
-Allocate memory for arrays, fill it with vertex attribs and upload to GPU
-===================
-*/
+// Allocate memory for arrays, fill it with vertex attribs and upload to GPU
 void R_GenerateVBO( void )
 {
 	model_t *world = WORLDMODEL;
@@ -2483,13 +2386,7 @@ void R_GenerateVBO( void )
 	gEngfuncs.Con_Reportf( S_NOTE "%s: uploaded VBOs in %.3g seconds, %.3g seconds total\n", __func__, t3 - t2, t3 - t1 );
 }
 
-/*
-==============
-R_AddDecalVBO
-
-generate decal mesh and put it to array
-==============
-*/
+// generate decal mesh and put it to array
 void R_AddDecalVBO( decal_t *pdecal, msurface_t *surf )
 {
 	int numVerts;
@@ -2517,13 +2414,7 @@ void R_AddDecalVBO( decal_t *pdecal, msurface_t *surf )
 	vbos.decaldata->decals[decalindex].numVerts = numVerts;
 }
 
-/*
-=============
-R_ClearVBO
-
-free all vbo data
-=============
-*/
+// free all vbo data
 void R_ClearVBO( void )
 {
 	for( vboarray_t *vbo = vbos.arraylist; vbo; vbo = vbo->next )
@@ -2546,13 +2437,7 @@ void R_ClearVBO( void )
 }
 
 
-/*
-===================
-R_DisableDetail
-
-disable detail tmu
-===================
-*/
+// disable detail tmu
 static void R_DisableDetail( void )
 {
 	if( mtst.details_enabled && mtst.tmu_dt != -1 )
@@ -2565,13 +2450,7 @@ static void R_DisableDetail( void )
 	}
 }
 
-/*
-===================
-R_EnableDetail
-
-enable detail tmu if availiable
-===================
-*/
+// enable detail tmu if available
 static void R_EnableDetail( void )
 {
 	if( mtst.details_enabled && mtst.tmu_dt != -1 )
@@ -2597,13 +2476,7 @@ static void R_EnableDetail( void )
 	}
 }
 
-/*
-==============
-R_SetLightmap
-
-enable lightmap on current tmu
-==============
-*/
+// enable lightmap on current tmu
 static void R_SetLightmap( void )
 {
 	if( mtst.skiptexture )
@@ -2643,13 +2516,7 @@ static void R_SetLightmap( void )
 	pglTexCoordPointer( 2, GL_FLOAT, sizeof( vbovertex_t ), (void*)offsetof(vbovertex_t, lm_tc ) );
 }
 
-/*
-==============
-R_SetDecalMode
-
-When drawing decal, disable or restore bump and details
-==============
-*/
+// When drawing decal, disable or restore bump and details
 static void R_SetDecalMode( qboolean enable )
 {
 	if( vboarray.decal_mode == enable )
@@ -2669,14 +2536,7 @@ static void R_SetDecalMode( qboolean enable )
 
 }
 
-/*
-==============
-R_SetupVBOTexture
-
-setup multitexture mode before drawing VBOs
-if tex is NULL, load texture by number
-==============
-*/
+// setup multitexture mode before drawing VBOs; if tex is NULL, load texture by number
 static texture_t *R_SetupVBOTexture( texture_t *tex, int number )
 {
 	if( mtst.skiptexture )
@@ -2812,13 +2672,7 @@ static void R_SetupVBOArrayDecalDlight( int decalcount )
 	vboarray.lstate = VBO_LIGHTMAP_DYNAMIC;
 }
 
-/*
-===================
-R_AdditionalPasses
-
-draw details when not enough tmus
-===================
-*/
+// draw details when not enough tmus
 static void R_AdditionalPasses( vboarray_t *vbo, int indexlen, void *indexarray, texture_t *tex, qboolean resetvbo, size_t offset )
 {
 	if( !indexlen )
@@ -3199,13 +3053,7 @@ static void R_DrawVBODlights( vboarray_t *vbo, vbotexture_t *vbotex, texture_t *
 
 
 
-/*
-=====================
-R_DrawLightmappedVBO
-
-Draw array for given vbotexture_t. build and draw dynamic lightmaps if present
-=====================
-*/
+// Draw array for given vbotexture_t, build and draw dynamic lightmaps if present
 static void R_DrawLightmappedVBO( vboarray_t *vbo, vbotexture_t *vbotex, texture_t *texture, int lightmap, qboolean skiplighting )
 {
 	if( vbotex->curindex )
@@ -3401,13 +3249,7 @@ static void R_ClearVBOState( qboolean drawlightmap, qboolean drawtextures )
 }
 
 
-/*
-=====================
-R_DrawVBO
-
-Draw generated index arrays
-=====================
-*/
+// Draw generated index arrays
 void R_DrawVBO( qboolean drawlightmap, qboolean drawtextures )
 {
 	int numtextures = WORLDMODEL->numtextures;
@@ -3591,18 +3433,7 @@ qboolean R_AddSurfToVBO( msurface_t *surf, qboolean buildlightmap )
 	return true;
 }
 
-/*
-=============================================================
-
-	WORLD MODEL
-
-=============================================================
-*/
-/*
-================
-R_RecursiveWorldNode
-================
-*/
+// WORLD MODEL
 static void R_RecursiveWorldNode( mnode_t *node, uint clipflags )
 {
 loc0:
@@ -3682,13 +3513,7 @@ loc0:
 	goto loc0;
 }
 
-/*
-================
-R_CullNodeTopView
-
-cull node by user rectangle (simple scissor)
-================
-*/
+// cull node by user rectangle (simple scissor)
 static qboolean R_CullNodeTopView( mnode_t *node )
 {
 	vec2_t	delta, size;
@@ -3705,11 +3530,6 @@ static qboolean R_CullNodeTopView( mnode_t *node )
 	return ( fabs( delta[0] ) > size[0] ) || ( fabs( delta[1] ) > size[1] );
 }
 
-/*
-================
-R_DrawTopViewLeaf
-================
-*/
 static void R_DrawTopViewLeaf( mleaf_t *pleaf, uint clipflags )
 {
 	msurface_t	**mark;
@@ -3742,11 +3562,6 @@ static void R_DrawTopViewLeaf( mleaf_t *pleaf, uint clipflags )
 	r_stats.c_world_leafs++;
 }
 
-/*
-================
-R_DrawWorldTopView
-================
-*/
 static void R_DrawWorldTopView( mnode_t *node, uint clipflags )
 {
 	msurface_t	*surf;
@@ -3814,11 +3629,6 @@ static void R_DrawWorldTopView( mnode_t *node, uint clipflags )
 	} while( node );
 }
 
-/*
-=============
-R_DrawWorld
-=============
-*/
 void R_DrawWorld( void )
 {
 	// paranoia issues: when gl_renderer is "0" we need have something valid for currententity
@@ -3838,20 +3648,13 @@ void R_DrawWorld( void )
 
 	gl_lms.dynamic_surfaces = NULL;
 #if XASH_PS3
-	/* Report last frame's dlight cost before resetting -- ps3gl's telemetry
-	 * window reads it once per frame via this call (a normal cross-module
-	 * function call, resolved at final link like pglFoo(), not an extern
-	 * data symbol -- see ps3gl_main.c's ps3gl_report_dlight_cost comment
-	 * for why: --static-linking's objcopy localizes every data symbol in
-	 * this file except GetRefAPI). */
+	/* Report last frame's dlight cost before resetting. A call, not extern data: --static-linking's
+	 * objcopy localizes every ref_gl data symbol except GetRefAPI. */
 	extern void ps3gl_report_dlight_cost( uint32_t surface_count, uint32_t luxel_count );
 	ps3gl_report_dlight_cost( r_dlight_surface_count, r_dlight_luxel_count );
 
-	/* Push the ps3gl texture-layout cvars down the same way (ps3gl cannot read
-	 * cvars itself). Cheap enough to do unconditionally per frame, and doing it
-	 * here rather than on FCVAR_CHANGED means a value set before the renderer
-	 * existed -- from userconfig.cfg -- still lands. Read at upload time, so a
-	 * change takes effect on the next map load / vid_restart. */
+	/* Push the ps3gl texture-layout cvars per frame (ps3gl can't read cvars), so a userconfig.cfg value
+	 * set before the renderer existed still lands. Read at upload: applies on the next map load. */
 	extern void ps3gl_set_texture_options( int swizzle_enabled, int mipmap_enabled );
 	ps3gl_set_texture_options( gl_ps3_swizzle.value != 0.0f, gl_ps3_mipmap.value != 0.0f );
 #endif
@@ -3897,13 +3700,7 @@ void R_DrawWorld( void )
 	gEngfuncs.R_DrawWorldHull();
 }
 
-/*
-===============
-R_MarkLeaves
-
-Mark the leaves and nodes that are in the PVS for the current leaf
-===============
-*/
+// Mark the leaves and nodes that are in the PVS for the current leaf
 void R_MarkLeaves( void )
 {
 	qboolean	novis = false;
@@ -3970,11 +3767,6 @@ void R_MarkLeaves( void )
 	}
 }
 
-/*
-========================
-GL_CreateSurfaceLightmap
-========================
-*/
 static void GL_CreateSurfaceLightmap( msurface_t *surf, model_t *loadmodel )
 {
 	mextrasurf_t	*info = surf->info;
@@ -4007,14 +3799,7 @@ static void GL_CreateSurfaceLightmap( msurface_t *surf, model_t *loadmodel )
 	R_BuildLightMap( surf, base, BLOCK_SIZE * 4, false );
 }
 
-/*
-==================
-GL_RebuildLightmaps
-
-Rebuilds the lightmap texture
-when gamma is changed
-==================
-*/
+// Rebuilds the lightmap texture when gamma is changed
 void GL_RebuildLightmaps( void )
 {
 	if( !ENGINE_GET_PARM( PARM_CLIENT_ACTIVE ) )
@@ -4056,14 +3841,7 @@ void GL_RebuildLightmaps( void )
 	}
 }
 
-/*
-==================
-GL_BuildLightmaps
-
-Builds the lightmap texture
-with all the surfaces from all brush models
-==================
-*/
+// Builds the lightmap texture with all the surfaces from all brush models
 void GL_BuildLightmaps( void )
 {
 	int	nColinElim = 0;
@@ -4092,6 +3870,9 @@ void GL_BuildLightmaps( void )
 
 	// setup the texture for dlights
 	R_InitDlightTexture();
+#if XASH_PS3
+	R_InitDlightRingPS3();
+#endif
 
 	// setup all the lightstyles
 	CL_RunLightStyles((lightstyle_t *)ENGINE_GET_PARM( PARM_GET_LIGHTSTYLES_PTR ));

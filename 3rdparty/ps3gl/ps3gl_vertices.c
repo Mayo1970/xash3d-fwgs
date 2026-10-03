@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>   // memalign/free for the host ring below
 #include <malloc.h>
+#include <unistd.h>   // usleep, for ps3gl_wait_idle's fence poll
 
 /* Forward declaration from ps3gl_matrices.c */
 
@@ -88,9 +89,8 @@ void *ps3gl_hring_reserve(uint32_t bytes)
         return NULL;
 
     if (ps3gl.hring.head + bytes > ps3gl.hring.seg_capacity) {
-        /* Same refuse-to-wrap policy as the vring: wrapping would stomp data
-         * the RSX has not fetched yet. The caller falls back to BSS for this
-         * one run, which is correct but slow, so this is counted and reported. */
+        /* Same refuse-to-wrap policy as the vring. The caller falls back to BSS for this run,
+         * correct but slow, so it is counted. */
         ps3gl.hring.frame_drops++;
         ps3gl.hring.total_drops++;
         return NULL;
@@ -124,12 +124,8 @@ ps3gl_vertex_t *ps3gl_vring_alloc(int count, uint32_t *out_offset)
     uint32_t needed = (uint32_t)(count * PS3GL_VERTEX_SIZE);
 
     if (ps3gl.vring.head + needed > ps3gl.vring.seg_capacity) {
-        /* Segment full for this frame -- refuse to wrap rather than stomp data the GPU hasn't
-         * fetched yet (submission runs ahead of GPU execution). Dropping the batch means
-         * visibly missing geometry, so this must stay loud: it is a sizing bug in
-         * PS3GL_VRING_SIZE, never something to live with. ps3gl_end_frame reports the
-         * per-frame tally rather than warning once per process, which is how the
-         * original once-only warning hid how often it was really happening. */
+        /* Refuse to wrap onto data the GPU has not fetched. A drop is missing geometry, i.e. a
+         * PS3GL_VRING_SIZE bug; end_frame reports it per frame (a once-only warning hid the rate). */
         ps3gl.vring.frame_drops++;
         ps3gl.vring.total_drops++;
         return NULL;
@@ -195,36 +191,16 @@ uint32_t ps3gl_gl_to_gcm_prim(GLenum mode)
 
 /* Submit accumulated vertices to RSX */
 
-/* Defined in ps3gl_main.c -- the real per-frame draw-call counter. Unlike
- * ps3gl_frame_draw_count below (only ever fed from glDrawElements, which
- * xash never calls), flush_immediate is the actual draw path every real
- * glBegin/glEnd triangle goes through. */
+/* The real per-frame draw counters (defined in ps3gl_main.c): every glBegin/glEnd draw goes
+ * through flush_immediate, unlike ps3gl_frame_draw_count below. */
 extern uint32_t ps3gl_frame_flush_count;
 extern uint32_t ps3gl_frame_flush_vertex_count;
-/* Per-frame count of GL_POLYGON draws merged into a batch instead of
- * flushed individually -- see ps3gl_main.c's telemetry window. The only way
- * to tell "batching is working" from "the state-clean gate never passes"
- * without this is to stare at flush-count deltas and guess. */
+/* GL_POLYGON draws merged into a batch this frame: tells "batching works" apart from "the
+ * state-clean gate never passes". */
 extern uint32_t ps3gl_frame_batched_poly_count;
 
-/* One vring_alloc + memcpy + attribute-bind, followed by `nranges` draw
- * calls against that single binding. Multiple rsxDrawVertexArray calls
- * against one unchanged attribute binding are legal -- the binding is
- * persistent GCM register state, DRAW_ARRAYS is a separate method -- so
- * this is what lets ps3gl_flush_polygon_batch() submit N polygons' worth
- * of still-intact triangle fans without any CPU-side fan-to-triangle
- * expansion. nranges==1 with first[0]==0 reproduces flush_immediate's
- * original single-draw FIFO output exactly.
- *
- * apply_state must be 0 for a deferred GL_POLYGON batch flush: those
- * vertices were admitted only while batch_state_is_clean() held, i.e. every
- * bit of state they need was already emitted to the FIFO by an earlier
- * submit_ranges call -- the FIFO is append-only, so re-running apply_*
- * here would emit whatever's current NOW (the next texture chain's bound
- * texture, R_BlendLightmaps' blend mode, ...) immediately before drawing
- * OLD vertices that were recorded under different state. That was the
- * actual bug behind "textures and polygons glitched": every batch drew
- * one state-change late, every single chain, every frame. */
+/* One vring copy and bind, then one draw per range (the binding persists). apply_state must be 0
+ * for a batch flush: its state is already in the FIFO, and re-applying drew it one state late. */
 static void submit_ranges(int total_verts, const int *first, const int *cnt,
                            int nranges, uint32_t gcm_prim, int apply_state)
 {
@@ -288,10 +264,8 @@ static void flush_immediate(void)
     submit_ranges(n, &first0, &n, 1, ps3gl_gl_to_gcm_prim(ps3gl.imm.prim), 1);
 }
 
-/* Force-submits a pending deferred GL_POLYGON batch, if any. Must run
- * before anything else writes to the GCM FIFO or ends the frame -- see
- * glBegin (non-GL_POLYGON), glClear, glDrawElements, and ps3gl_end_frame's
- * hooks. */
+/* Must run before anything else writes to the FIFO or ends the frame: glBegin (non-GL_POLYGON),
+ * glClear, glDrawElements and ps3gl_end_frame call it. */
 void ps3gl_flush_polygon_batch(void)
 {
     if (!ps3gl.imm.batch_active) return;
@@ -306,14 +280,8 @@ void ps3gl_flush_polygon_batch(void)
     ps3gl.imm.count         = 0;
 }
 
-/* Is it safe to merge the polygon that just ended into the pending batch?
- * Must mirror exactly what ps3gl_apply_states/apply_matrices/apply_textures/
- * apply_shader would each do if called right now -- not a proxy, the actual
- * conditions, since apply_shader in particular has no dirty flag of its own
- * (ps3gl_shaders.c) and apply_textures' per-TMU condition (ps3gl_textures.c)
- * is not simply "tmu->dirty". If this drifts from those functions, batching
- * either never engages (harmless, just measure-and-fix) or merges polygons
- * across a real state change (a visible bug) -- keep it in lockstep with them. */
+/* Must mirror the exact conditions of ps3gl_apply_states/matrices/textures/shader, or batching
+ * merges polygons across a real state change. Keep it in lockstep with them. */
 static int batch_state_is_clean(void)
 {
     if (ps3gl.dirty != 0) return 0;
@@ -342,12 +310,8 @@ static int batch_state_is_clean(void)
 
 void glBegin(GLenum mode)
 {
-    /* A pending batch may only ever hold polygons under state that's
-     * already been applied to the FIFO (see the invariant comment on
-     * ps3gl_flush_polygon_batch's declaration in ps3gl.h) -- so any
-     * non-GL_POLYGON primitive, or running low on batch headroom, forces
-     * it out now rather than risk it getting silently discarded by the
-     * unconditional imm.count reset below. */
+    /* A non-GL_POLYGON primitive or low batch headroom flushes the batch now; the imm.count
+     * reset below would otherwise drop it. */
     if (ps3gl.imm.batch_active &&
         (mode != GL_POLYGON ||
          ps3gl.imm.batch_nranges >= PS3GL_MAX_BATCH_RANGES ||
@@ -365,9 +329,7 @@ void glEnd(void)
     int n = ps3gl.imm.count - ps3gl.imm.vert_start;
 
     if (ps3gl.imm.prim != GL_POLYGON) {
-        /* Every other primitive: unchanged from before batching existed.
-         * Any pending batch was already force-flushed by this glBegin
-         * (above), so there is nothing to merge or protect here. */
+        /* Other primitives draw at once; this glBegin already flushed any pending batch. */
         flush_immediate();
         ps3gl.imm.count = 0;
         return;
@@ -385,12 +347,8 @@ void glEnd(void)
         return;
     }
 
-    /* State changed since the pending batch was applied. Flush it under
-     * its own already-applied state first (truncate count to just the
-     * batch's own vertices so submit_ranges doesn't also copy this new,
-     * not-yet-merged polygon), then submit this polygon alone via the
-     * normal single-draw path, which applies the new state and clears the
-     * dirty flags. Leaves nothing pending, satisfying the invariant. */
+    /* State changed: flush the batch under its own state (count cut to its vertices), then draw
+     * this polygon alone, which applies the new state. Nothing stays pending. */
     ps3gl.imm.count = ps3gl.imm.vert_start;
     ps3gl_flush_polygon_batch();
     memmove(ps3gl.imm.buf, &ps3gl.imm.buf[ps3gl.imm.vert_start],
@@ -452,24 +410,57 @@ void glMultiTexCoord2fARB(GLenum target, GLfloat s, GLfloat t)
 /* Frame draw count tracking */
 static int ps3gl_frame_draw_count = 0;
 
-void glFinish(void) { ps3gl_frame_draw_count = 0; }
+/* Backend label with a fresh value per call: it lands only once every earlier draw has
+ * finished, texture reads included. Callable without ps3gl initialized (ref_soft). */
+void ps3gl_wait_idle(gcmContextData *ctx)
+{
+    static volatile uint32_t *label = NULL;
+    static uint32_t value = 0;
+    int waited = 0;
+
+    if (!ctx) return;
+
+    /* A deferred GL_POLYGON batch is not in the FIFO yet. */
+    if (ps3gl_ptr)
+        ps3gl_flush_polygon_batch();
+
+    if (!label) {
+        label = (volatile uint32_t *)gcmGetLabelAddress(PS3GL_LABEL_WAIT_IDLE);
+        if (!label) {
+            rsxFlushBuffer(ctx);
+            return;
+        }
+        *label = 0;
+    }
+
+    value++;
+    rsxSetWriteBackendLabel(ctx, PS3GL_LABEL_WAIT_IDLE, value);
+    rsxFlushBuffer(ctx);
+
+    while (*label != value && waited < 20000) {
+        usleep(10);
+        waited++;
+    }
+    if (*label != value)
+        ps3gl_log("[ps3gl] WARNING: wait-idle fence timed out (val=%u label=%u)\n",
+                  (unsigned)value, (unsigned)*label);
+}
+
+void glFinish(void)
+{
+    ps3gl_wait_idle(ps3gl_get_ctx());
+    ps3gl_frame_draw_count = 0;
+}
 void ps3gl_inc_draw_count(void) { ps3gl_frame_draw_count++; }
 void glFlush(void) {}
 void glDrawBuffer(GLenum mode) { (void)mode; }
 
-/* Declared in engine/platform/ps3/vid_ps3.c; not in a shared header because
- * that file can't be included across the ref_gl/ps3gl module boundary (same
- * convention as ps3gl_report_flip_wait etc, see ps3gl.h). */
+/* Defined in vid_ps3.c; declared by hand since no shared header crosses into ps3gl
+ * (same convention as ps3gl_report_flip_wait). */
 extern void *PS3_RSX_GetColorBuffer(uint32_t *pitch, uint32_t *width, uint32_t *height);
 
-/* Only caller is VID_ScreenShot's savegame/levelshot capture (ref/gl/gl_backend.c),
- * always with x=0,y=0,GL_RGBA,GL_UNSIGNED_BYTE -- this was previously a total
- * no-op, so every saveshot .bmp was written from an uninitialized buffer
- * (garbage in the load-game preview). The RSX color surface is A8R8G8B8,
- * stored on this big-endian target as bytes A,R,G,B per word (see
- * ps3gl_textures.c's fetch_pixel comment) with row 0 = top of screen. Real GL
- * glReadPixels returns row 0 = bottom of screen; the caller already flips
- * back via IMAGE_FLIP_Y, so this must flip too or the two cancel out wrong. */
+/* Only for VID_ScreenShot's saveshots. The RSX surface is A,R,G,B bytes with row 0 at the top;
+ * GL returns row 0 at the bottom and the caller flips back via IMAGE_FLIP_Y, so flip here too. */
 void glReadPixels(GLint x, GLint y, GLsizei w, GLsizei h,
                       GLenum format, GLenum type, void *pixels)
 {

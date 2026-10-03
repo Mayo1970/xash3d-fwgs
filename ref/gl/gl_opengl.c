@@ -21,28 +21,8 @@ CVAR_DEFINE_AUTO( gl_test, "0", 0, "engine developer cvar for quick testing new 
 CVAR_DEFINE_AUTO( gl_msaa, "1", FCVAR_GLCONFIG, "enable or disable multisample anti-aliasing" );
 CVAR_DEFINE_AUTO( gl_stencilbits, "8", FCVAR_GLCONFIG|FCVAR_READ_ONLY, "pixelformat stencil bits (0 - auto)" );
 #if XASH_PS3
-/* PS3 uses Xash's plain multiplicative lightmap path, like the PSP renderer.
- *
- * Deliberately NOT FCVAR_GLCONFIG, and that omission IS the fix -- an earlier
- * revision declared this FCVAR_GLCONFIG|FCVAR_READ_ONLY and it never once took
- * effect on hardware. A GLCONFIG cvar is archived into opengl.cfg and replayed
- * every boot through Cvar_SetGL -> Cvar_FullSet -> Cvar_DirectFullSet, and that
- * chain never calls Cvar_CanSet, so FCVAR_READ_ONLY does not defend it. Any
- * console whose opengl.cfg predated this override silently ran overbright
- * forever, and the console command that was supposed to prove otherwise was
- * rejected by the very flag meant to protect the value.
- *
- * Hardware-confirmed 2026-08-08 by the dlight-pass state probe: the lightmap
- * pass reported blend src=GCM_DST_COLOR (0x0306) and vertex colour 0xaaaaaa
- * (= 128/192), values reachable only from the overbright branch of
- * R_BlendLightmaps, on a build declaring this cvar "0".
- *
- * Without FCVAR_GLCONFIG the value is never archived, and Cvar_SetGL refuses a
- * stale opengl.cfg line outright ("Can't set non-GL cvar"), so existing installs
- * self-heal on the next config rewrite. FCVAR_READ_ONLY is deliberately NOT set
- * either: the cvar stays settable from the console so the path remains A/B-able
- * on real hardware, which is how the bug was finally caught. It just cannot
- * persist across a boot any more. */
+/* PS3 uses the plain multiplicative lightmap path. Flags 0: opengl.cfg replay skips Cvar_CanSet, so an
+ * archived value forced overbright on (HW 2026-08-08); not READ_ONLY, so the console can still A/B it. */
 CVAR_DEFINE_AUTO( gl_overbright, "0", 0, "overbrights (PS3 default off; not archived)" );
 #else
 CVAR_DEFINE_AUTO( gl_overbright, "1", FCVAR_GLCONFIG, "overbrights" );
@@ -50,14 +30,13 @@ CVAR_DEFINE_AUTO( gl_overbright, "1", FCVAR_GLCONFIG, "overbrights" );
 CVAR_DEFINE_AUTO( gl_fog, "1", FCVAR_GLCONFIG, "allow for rendering fog using built-in OpenGL fog implementation" );
 CVAR_DEFINE_AUTO( gl_litwater_force, "0", FCVAR_GLCONFIG, "force enable lightmapped water, even if support not declared in the map" );
 #if XASH_PS3
-// ps3gl texture-layout options. ps3gl has no access to the cvar system, so
-// these are pushed down once per frame (see R_DrawWorld) and read at texture-
-// upload time -- change one, then reload the map or vid_restart. That is what
-// makes a same-session A/B possible on real hardware without a rebuild.
+// ps3gl texture-layout options, pushed down per frame (ps3gl can't read cvars) and read at upload
+// time: change one, then reload the map. That makes a same-session A/B possible without a rebuild.
 CVAR_DEFINE_AUTO( gl_ps3_swizzle, "1", FCVAR_GLCONFIG, "PS3: upload textures in RSX swizzled (Morton) layout instead of linear" );
 CVAR_DEFINE_AUTO( gl_ps3_mipmap, "0", FCVAR_GLCONFIG, "PS3: upload full mipmap chains (changes the image: distant surfaces filter instead of alias)" );
 CVAR_DEFINE_AUTO( gl_ps3_dump_dlight, "0", 0, "PS3 diagnostic: save every dynamic-light atlas page from the next rendered pass" );
 CVAR_DEFINE_AUTO( gl_ps3_dlight_probe, "0", 0, "PS3 diagnostic: dynamic-lightmap composition isolation (0 ship, 1 no-blend+replace, 2 no-blend, 3 blend+replace, 4 blend+white)" );
+CVAR_DEFINE_AUTO( gl_ps3_dlight_ring, "1", 0, "PS3: give every dynamic-lightmap upload its own texture from a ring (0 = one shared texture, for A/B)" );
 #endif
 CVAR_DEFINE_AUTO( r_lighting_ambient, "0.3", FCVAR_GLCONFIG, "map ambient lighting scale" );
 CVAR_DEFINE_AUTO( r_detailtextures, "1", FCVAR_GLCONFIG, "enable detail textures support" );
@@ -284,9 +263,8 @@ static const dllfunc_t drawrangeelementsextfuncs[] MAYBE_UNUSED =
 };
 
 
-// mangling in gl2shim???
-// still need resolve some ext dynamicly, and mangling beginend wrappers will help only with LTO
-// anyway this will not work with gl-wes/nanogl, we do not link to libGLESv2, so skip this now
+// mangling in gl2shim? Some ext still resolve dynamically and mangled beginend wrappers help only with
+// LTO; it can't work with gl-wes/nanogl anyway (we don't link libGLESv2), so skip this now
 #if !XASH_GL_STATIC
 static const dllfunc_t mapbufferrangefuncs[] =
 {
@@ -362,17 +340,8 @@ static const dllfunc_t shaderobjectsfuncs[] MAYBE_UNUSED =
 //{ GL_CALL( glVertexAttrib4ubv ) },
 };
 
-/*
-==================
-Even if *ARB functions may work in GL driver in Core context,
-renderdoc completely ignores this calls, so we cannot workaround this
-by removing ARB suffix after failed function resolve
-I desided not to remove ARB suffix from function declarations because
-it historicaly related to ARB_shader_object extension, not GL2+ functions
-and all shader code from XashXT/ancient xash3d uses it too
-Commented out lines left there intentionally to prevent usage on core/gles
-==================
-*/
+// ARB suffixes stay (ARB_shader_object history, XashXT shader code); renderdoc ignores *ARB calls in
+// Core contexts, so no strip-and-retry. Commented-out entries are left on purpose, to block core/gles use.
 
 static const dllfunc_t shaderobjectsfuncs_gles[] =
 {
@@ -458,13 +427,7 @@ static const dllfunc_t multitexturefuncs_es2[] MAYBE_UNUSED =
 
 #endif // !XASH_GL_STATIC
 
-/*
-========================
-DebugCallback
-
-For ARB_debug_output
-========================
-*/
+// For ARB_debug_output
 #if !XASH_GL4ES // GL4ES doesn't provide glDebug functions, even as stubs
 static void APIENTRY GL_DebugOutput( GLuint source, GLuint type, GLuint id, GLuint severity, GLint length, const GLcharARB *message, GLvoid *userParam )
 {
@@ -489,11 +452,6 @@ static void APIENTRY GL_DebugOutput( GLuint source, GLuint type, GLuint id, GLui
 }
 #endif // !XASH_GL4ES
 
-/*
-=================
-GL_SetExtension
-=================
-*/
 static void GL_SetExtension( int r_ext, int enable )
 {
 	if( r_ext >= 0 && r_ext < GL_EXTCOUNT )
@@ -501,11 +459,6 @@ static void GL_SetExtension( int r_ext, int enable )
 	else gEngfuncs.Con_Printf( S_ERROR "%s: invalid extension %d\n", __func__, r_ext );
 }
 
-/*
-=================
-GL_CheckExtension
-=================
-*/
 static qboolean GL_CheckExtension( const char *name, const dllfunc_t *funcs, size_t num_funcs, const char *cvarname, int r_ext, float minver )
 {
 	const float glver = (float)glConfig.version_major + glConfig.version_minor / 10.0f;
@@ -607,24 +560,13 @@ static qboolean GL_CheckExtension( const char *name, const dllfunc_t *funcs, siz
 	return false;
 }
 
-/*
-==============
-GL_GetProcAddress
-
-defined just for nanogl/glwes, so it don't link to SDL2 directly, nor use dlsym
-==============
-*/
+// defined just for nanogl/glwes, so it doesn't link to SDL2 directly, nor use dlsym
 void GAME_EXPORT *GL_GetProcAddress( const char *name ); // keep defined for nanogl/wes
 void GAME_EXPORT *GL_GetProcAddress( const char *name )
 {
 	return gEngfuncs.GL_GetProcAddress( name );
 }
 
-/*
-===============
-GL_SetDefaultTexState
-===============
-*/
 static void GL_SetDefaultTexState( void )
 {
 	memset( glState.currentTextures, -1, MAX_TEXTURE_UNITS * sizeof( *glState.currentTextures ));
@@ -638,11 +580,6 @@ static void GL_SetDefaultTexState( void )
 	}
 }
 
-/*
-===============
-GL_SetDefaultState
-===============
-*/
 static void GL_SetDefaultState( void )
 {
 	memset( &glState, 0, sizeof( glState ));
@@ -653,11 +590,6 @@ static void GL_SetDefaultState( void )
 	tr.draw_stack_pos = 0;
 }
 
-/*
-===============
-GL_SetDefaults
-===============
-*/
 static void GL_SetDefaults( void )
 {
 	pglFinish();
@@ -698,11 +630,6 @@ static void GL_SetDefaults( void )
 }
 
 
-/*
-=================
-R_RenderInfo_f
-=================
-*/
 static void R_RenderInfo( qboolean startup )
 {
 	gEngfuncs.Con_Printf( "\n" );
@@ -1173,11 +1100,6 @@ void GL_ClearExtensions( void )
 
 //=======================================================================
 
-/*
-=================
-GL_InitCommands
-=================
-*/
 static void GL_InitCommands( void )
 {
 	gEngfuncs.Cvar_RegisterVariable( &r_lighting_ambient );
@@ -1226,11 +1148,10 @@ static void GL_InitCommands( void )
 	gEngfuncs.Cvar_RegisterVariable( &gl_ps3_mipmap );
 	gEngfuncs.Cvar_RegisterVariable( &gl_ps3_dump_dlight );
 	gEngfuncs.Cvar_RegisterVariable( &gl_ps3_dlight_probe );
+	gEngfuncs.Cvar_RegisterVariable( &gl_ps3_dlight_ring );
 	{
-		// Push once here as well as per-frame from R_DrawWorld: the per-frame
-		// push cannot cover the FIRST map, whose textures upload before any
-		// world is drawn. Without this, a value set in userconfig.cfg would be
-		// silently ignored until the second map load.
+		// Also push here: the per-frame push in R_DrawWorld can't cover the first map, whose
+		// textures upload before any world is drawn, so a userconfig.cfg value would be ignored.
 		extern void ps3gl_set_texture_options( int swizzle_enabled, int mipmap_enabled );
 		ps3gl_set_texture_options( gl_ps3_swizzle.value != 0.0f, gl_ps3_mipmap.value != 0.0f );
 	}
@@ -1246,13 +1167,7 @@ static void GL_InitCommands( void )
 	gEngfuncs.Cmd_AddCommand( "timerefresh", SCR_TimeRefresh_f, "turn quickly and print rendering statistcs" );
 }
 
-/*
-===============
-R_CheckVBO
-
-register VBO cvars and get default value
-===============
-*/
+// register VBO cvars and get default value
 static void R_CheckVBO( void )
 {
 	qboolean disable = false;
@@ -1277,14 +1192,8 @@ static void R_CheckVBO( void )
 	}
 
 #if XASH_PS3
-	// The max_texture_units < 3 rule above is a GLES1-driver workaround (those
-	// break dlights when mixing VBOs and client arrays). ps3gl reports the
-	// RSX's real 2 units, so it trips that rule and r_vbo could never be
-	// turned on at all -- while ps3gl's VBOs are exactly what keeps static
-	// world geometry in RSX-local memory instead of re-interleaving it on the
-	// PPE every frame. Allow r_vbo here, but leave r_vbo_dlightmode off: that
-	// is the path the 3-unit rule is actually about, and it is the one that
-	// mixes a VBO vertex array with client-memory dlight texcoords.
+	// The < 3 units rule is a GLES1-driver dlight workaround, and RSX really has 2, so r_vbo could never
+	// turn on. Allow it, but keep r_vbo_dlightmode off: that path mixes VBO and client-memory dlight texcoords.
 	if( disable && !flags && GL_Support( GL_ARB_VERTEX_BUFFER_OBJECT_EXT )
 	    && GL_Support( GL_ARB_MULTITEXTURE ) && glConfig.max_texture_units >= 2 )
 	{
@@ -1300,22 +1209,12 @@ static void R_CheckVBO( void )
 	}
 }
 
-/*
-=================
-GL_RemoveCommands
-=================
-*/
 static void GL_RemoveCommands( void )
 {
 	gEngfuncs.Cmd_RemoveCommand( "r_info" );
 	gEngfuncs.Cmd_RemoveCommand( "timerefresh" );
 }
 
-/*
-===============
-R_Init
-===============
-*/
 qboolean R_Init( void )
 {
 	if( glw_state.initialized )
@@ -1360,11 +1259,6 @@ qboolean R_Init( void )
 	return true;
 }
 
-/*
-===============
-R_Shutdown
-===============
-*/
 void R_Shutdown( void )
 {
 	if( !glw_state.initialized )
@@ -1386,12 +1280,7 @@ void R_Shutdown( void )
 	gEngfuncs.R_Free_Video();
 }
 
-/*
-=================
-GL_ErrorString
-convert errorcode to string
-=================
-*/
+// convert errorcode to string
 const char *GL_ErrorString( int err )
 {
 	switch( err )
@@ -1413,12 +1302,7 @@ const char *GL_ErrorString( int err )
 	}
 }
 
-/*
-=================
-GL_CheckForErrors
-obsolete
-=================
-*/
+// obsolete
 void GL_CheckForErrors_( const char *filename, const int fileline )
 {
 	if( !gl_check_errors.value || !gpGlobals->developer )

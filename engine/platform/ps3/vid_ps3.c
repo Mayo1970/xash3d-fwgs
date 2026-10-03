@@ -33,37 +33,18 @@ GNU General Public License for more details.
 #include <sysutil/video.h>
 #include "ps3gl.h" // 3rdparty/ps3gl -- RSX-backed GL 1.1, linked into the engine
 
-// Two renderers share this backend: REF_SOFTWARE draws into ps3_swbuffer (XDR)
-// then SW_UnlockBuffer copies it into the RSX display buffer (presentation-only,
-// no render target/depth). REF_GL issues real GL calls via ps3gl straight into
-// the display buffer, needing a Z24S8 depth buffer and an rsxSetSurface target.
-// Never read the RSX/GDDR3 buffer back on the PPE (~16 MB/s) in either mode.
+// REF_SOFTWARE copies ps3_swbuffer (XDR) into the display buffer; REF_GL draws into it through
+// ps3gl with a Z24S8 depth target. Never read GDDR3 back on the PPE (~16 MB/s) in either mode.
 
 #define PS3_SCREEN_WIDTH  1280
 #define PS3_SCREEN_HEIGHT 720
 
-// The command-buffer size is hardware-validated -- rsx.h's own doc-comment
-// defaults (64KB CB / 1MB host) failed on real hardware, and 1 MB is what
-// tools/ps3_video and the sibling ioQuake3-PS3 port both use.
-//
-// The IO buffer is a different story. It is XDR (main RAM) mapped for RSX, and
-// rsxInit only carves the command buffer out of it. Nothing in this port ever
-// places anything else there: every RSX-visible surface comes from rsxMemalign
-// (GDDR3 -- color/depth buffers, textures, shader ucode, ps3gl's vertex ring),
-// and ps3gl's host ring maps its own separate allocation through
-// gcmMapMainMemory. So the 32 MB inherited from the PSL1GHT samples parked
-// 31 MB of a ~190 MB console for a 1 MB command buffer. ioQuake3-PS3 can afford
-// that; a Counter-Strike map load cannot.
-//
-// 8 MB keeps 7 MB of slack over the command buffer for anything gcmInitBody
-// reserves internally, stays 1 MB-aligned as gcm requires, and returns 24 MB
-// to the heap. If a hardware round ever shows RSX init failing or IO-space
-// exhaustion, step this back up (16 MB, then 32 MB) rather than shrinking it.
+// 1 MB CB is HW-validated (rsx.h's 64 KB default failed). The IO buffer only holds the CB, so 8 MB
+// (not the samples' 32 MB) frees 24 MB; if RSX init or IO space fails on HW, raise it, never shrink.
 #define PS3_RSX_CB_SIZE    ( 1 * 1024 * 1024 )
 #define PS3_RSX_HOST_SIZE  ( 8 * 1024 * 1024 )
-// 3, not 2: with only 2 buffers, any frame exceeding one vsync interval gets
-// bumped a full extra tick, quantizing to a hard 30fps under GCM_FLIP_VSYNC.
-// Matches the sibling ioQuake3-PS3 port's RSX_FB_COUNT.
+// 3, not 2: with 2 buffers any frame over one vsync waits a full extra tick (a hard 30fps
+// under GCM_FLIP_VSYNC). Matches ioQuake3-PS3's RSX_FB_COUNT.
 #define PS3_FB_COUNT       3
 
 static byte *ps3_swbuffer;
@@ -186,16 +167,14 @@ static void PS3_RSX_SetRenderTarget( int index )
 	rsxSetSurface( ps3_gcm_context, &sf );
 }
 
-// Exposes the current color buffer for the one-shot savegame/levelshot CPU
-// readback in ps3gl_vertices.c's glReadPixels. Flushes/waits first so the copy
-// sees the just-drawn frame; only acceptable once per screenshot, never per-frame.
+// For glReadPixels' one-shot saveshot readback: waits for the RSX so the copy sees the
+// finished frame. Fine once per screenshot, never per frame.
 void *PS3_RSX_GetColorBuffer( u32 *pitch, u32 *width, u32 *height )
 {
 	if( !ps3_rsx_ready )
 		return NULL;
 
-	rsxFlushBuffer( ps3_gcm_context );
-	rsxFinish( ps3_gcm_context, 1 );
+	ps3gl_wait_idle( ps3_gcm_context );
 
 	if( pitch )  *pitch  = ps3_color_pitch;
 	if( width )  *width  = ps3_display_width;
@@ -230,10 +209,8 @@ static qboolean PS3_RSX_Init( void )
 	if( ret != 0 || !ps3_gcm_context )
 		return false;
 
-	// Request 720p regardless of the TV's negotiated mode -- videoConfigure genuinely
-	// renegotiates the physical signal, and HW telemetry shows the renderer is
-	// fill-rate-bound at 1080p (~50-58fps) but locked 60fps at 720p. Falls back to
-	// the TV's actual mode only if 720p genuinely isn't offered.
+	// Request 720p whatever the TV negotiated: the renderer is fill-bound at 1080p (~50-58fps)
+	// but locked 60fps at 720p. Fall back to the TV's mode only if 720p isn't offered.
 	s32 vid_res = VIDEO_RESOLUTION_720;
 	u8 vid_aspect = VIDEO_ASPECT_16_9;
 
@@ -321,9 +298,8 @@ void VID_Info_f( void )
 	Con_Printf( "Window size: " S_GREEN "%ux%u" S_DEFAULT "\n", ps3_display_width, ps3_display_height );
 }
 
-// REF_GL only. Opens the next frame: waits for the buffer, re-points the RSX,
-// resets ps3gl's per-frame state. Called from GL_SwapBuffers (and once from
-// R_Init_Video for the first frame) since ref_gl gives only one per-frame hook.
+// REF_GL only: waits for a buffer, re-points the RSX, resets ps3gl's frame state. Called from
+// GL_SwapBuffers and once from R_Init_Video, since ref_gl has only one per-frame hook.
 static void PS3_GL_BeginFrame( void )
 {
 	PS3_RSX_WaitForFreeBuffer();
@@ -361,9 +337,8 @@ qboolean R_Init_Video( ref_graphic_apis_t type )
 
 	ps3_gl_mode = ( type == REF_GL );
 
-	// Let the renderer request context attributes before the context exists.
-	// Nothing is negotiable on RSX (GL_SetAttribute is a no-op), but this is
-	// also where ref_gl decides glw_state.extended, so it must still run.
+	// Nothing is negotiable on RSX (GL_SetAttribute is a no-op), but ref_gl decides
+	// glw_state.extended here, so this must still run before the context exists.
 	if( ps3_gl_mode )
 		ref.dllFuncs.GL_SetupAttributes( glw_state.safe );
 
@@ -419,9 +394,9 @@ void R_Free_Video( void )
 	{
 		// Drain the FIFO and block until the RSX is idle before freeing memory it may
 		// still reference -- else rsxFree() below races the GPU and hard-freezes.
-		rsxFinish( ps3_gcm_context, 1 );
+		ps3gl_wait_idle( ps3_gcm_context );
 
-		PS3_DIAG( "R_Free_Video: after rsxFinish" );
+		PS3_DIAG( "R_Free_Video: after ps3gl_wait_idle" );
 
 		// Unregister the flip handler before tearing down GCM host memory below --
 		// a flip interrupt after ps3_rsx_host_addr is freed would run against torn-down state.
@@ -582,9 +557,8 @@ void SW_UnlockBuffer( void )
 	PS3_RSX_WaitForFreeBuffer();
 	PS3_DIAG_FRAME( "vid: SW_UnlockBuffer after WaitForFreeBuffer" );
 
-	// ps3_swbuffer's ARGB8888 layout already matches GCM_SURFACE_A8R8G8B8's byte
-	// order, so this is a straight per-row copy -- rows differ since XDR is tightly
-	// packed but the RSX buffer's pitch is 64-byte aligned.
+	// ARGB8888 already matches GCM_SURFACE_A8R8G8B8's byte order, so copy row by row:
+	// XDR rows are tightly packed but the RSX pitch is 64-byte aligned.
 	dst = (byte *)ps3_color_buffer[ps3_current_fb];
 	src_pitch = ps3_display_width * 4;
 

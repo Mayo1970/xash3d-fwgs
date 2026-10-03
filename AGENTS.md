@@ -1866,102 +1866,66 @@ speculate on hardware behavior -- verify on the actual console.
       `ui_prefer_won_background 1`. The MSRLE path itself is verified
       correct off-target but has not yet been seen on hardware.
 
-- [ ] **16. GoldSrc flashlight/dynamic-light composition -- SHELVED
-      2026-08-08 at user request. Do not resume without an explicit user
-      request.** The flashlight works logically and its dynamic lightmap moves
-      with the view, but on PS3 the final lightmap pass is composed incorrectly:
-      toggling the flashlight changes the scene, yet it does not produce the
-      correctly localized illumination visible in the PC reference build.
-      This is not a shadow-casting system: the HL client traces forward and
-      places a small point dlight at the hit position; `ref_gl` marks affected
-      BSP surfaces, rebuilds their luxels into the dynamic lightmap atlas, and
-      blends that atlas over the already-rendered base textures.
+- [x] **16. GoldSrc flashlight/dynamic-light composition** -- FIXED and
+      HARDWARE-VALIDATED 2026-10-04 (resumed at user request; shelved
+      2026-08-08 after five failed hardware rounds). Covers the flashlight
+      and night vision (OpFor `EF_BRIGHTLIGHT`, CS `CHudNVG` dlight), which
+      share the dynamic-lightmap path.
 
-      **What hardware evidence established:** gameplay telemetry repeatedly
-      showed nonzero dlighted surfaces/luxels and continuous `TexSubImage2D`
-      uploads while the flashlight was active. Dumps such as
-      `ps3_dlight_431_00.tga`, `ps3_dlight_207_00.tga`, and
-      `ps3_dlight_121_00.tga` showed the generated atlas content; the moving
-      result and replacement-mode probes established that the dynamic atlas and
-      surface coordinates reach the draw. The PC build at the same viewpoint
-      composes the pass correctly. The remaining unresolved boundary is final
-      framebuffer composition in the PS3 GL-to-RSX path.
+      **Root cause: upload/draw ordering, not blending.** ref_gl puts every
+      dynamic lightmap into ONE texture, `tr.dlightTexture`, and uploads it
+      many times per frame: once per atlas page and once per
+      `R_BlendLightmaps` call (world, then each brush entity, then water).
+      Each call restarts the atlas at (0,0), so the uploads overwrite the
+      same texels. ps3gl's `glTexSubImage2D` CPU-writes straight into the
+      live VRAM texture, and the RSX normally sees a frame's commands only at
+      `GL_SwapBuffers`, so it draws the whole frame after every CPU write:
+      each dlit draw samples the frame's LAST upload. A desktop driver orders
+      the upload after earlier draws; ps3gl does not. Symptom: a dlit brush
+      entity near the beam overwrote the world's atlas rects, so whole world
+      faces brightened as polygons instead of one round spot. Night vision
+      (radius 400, CS 750-800) fills several pages even with no entities.
 
-      **Ruled out on real hardware, do not repeat without new evidence:**
+      **Fix** (`ref/gl/gl_rsurf.c`, PS3 only): each dlight upload takes the
+      next texture of `ps3_dlight_ring[2][16]` (128x128 pages, 2 MB VRAM),
+      half selected by `ps3gl_frame_index()` parity -- `ps3gl_begin_frame`
+      already fences the frame before last, so a half is free again when
+      its parity returns. A frame that needs more than 16 pages calls
+      `pglFinish()` once and reuses its half (a possible stutter, e.g. CS
+      night vision in a busy map). `gl_ps3_dlight_ring 0` (default 1, not
+      archived) restores the single shared texture for a live A/B. Not
+      covered: the `gl_vbo 1` dlight path and 1024-size lightmap blocks,
+      which still use `tr.dlightTexture`.
 
-      1. Texture-cache coherency alone: PS3GL now tracks texel writes separately,
-         orders PPE stores with `sync`, and emits one
-         `rsxInvalidateTextureCache` before sampling an updated bound texture;
-         the flashlight was unchanged.
-      2. An in-flight atlas rewrite: a PS3-only diagnostic `pglFinish` fully
-         serialized pending draws before `LM_UploadDynamicBlock`; unchanged.
-      3. Atlas generation/placement and a simple big-endian upload failure:
-         CPU atlas dumps, byte-layout probes, and replacement-mode rendering
-         did not account for the faulty final appearance.
-      4. ~~VBO selection and overbright policy~~ -- **HALF OF THIS ENTRY WAS
-         WRONG, see the 2026-08-08 round below.** `gl_vbo 1` making the image
-         worse still stands. The claim that forcing `gl_overbright 0` did not
-         correct it does NOT: that cvar could not be set at all at the time, so
-         the test never ran.
-      5. Deferred `GL_POLYGON` batching: the diagnostic build submitted every
-         polygon immediately. During actual gameplay it logged `1.0
-         passes/frame`, `0.0 GL_POLYGON draws merged/frame`, 10--12 dlighted
-         surfaces/frame, and 450--871 draw flushes/frame; the flashlight was
-         still unchanged. The temporary no-batching source switch was reverted
-         when this goal was shelved. Note this exoneration was measured on a
-         build with batching *disabled*; the shipping build batches 500--700
-         polygons/frame, so it does not automatically carry over.
+      **Why the August rounds missed it: the only test of this race was a
+      no-op.** "Serialize with `pglFinish` before `LM_UploadDynamicBlock`"
+      called `rsxFinish(ctx, 1)`. PSL1GHT's `rsxFinish` (disassembled from
+      `librsx.a`) flushes, then returns at once if the RSX reference
+      register already holds the value -- so a constant value waits only
+      the first time. `ps3gl_wait_idle()` (`3rdparty/ps3gl/ps3gl_vertices.c`)
+      is the real fence: a backend label (index 67) with an incrementing
+      value. `glFinish` and the two former `rsxFinish(..., 1)` calls in
+      `vid_ps3.c` (saveshot readback, `R_Free_Video`) now use it. **Never
+      fence with a constant `rsxFinish` value** -- `ps3gl_glapi.c`'s VBO
+      free-queue overflow path still does.
 
-      **2026-08-08 round -- resumed at user request. The blend hypothesis is
-      dead; one real bug was found and fixed on the way.**
+      **Still true from the August rounds:** the CPU atlas content and its
+      RSX byte layout are correct (`gl_ps3_dump_dlight`, upload probe
+      `byte mismatches=0/1920`); texture-cache invalidation and `GL_POLYGON`
+      batching were not the cause; with `gl_overbright 0` every blend,
+      texenv and depth field matches PC. One real bug was found on the way:
+      `gl_overbright` ran as 1 on a build declaring it 0, because
+      `FCVAR_READ_ONLY` cannot defend an `FCVAR_GLCONFIG` cvar from the
+      opengl.cfg replay (`Cvar_DirectFullSet` skips `Cvar_CanSet`); fixed by
+      dropping `FCVAR_GLCONFIG` on PS3 (`ref/gl/gl_opengl.c`). The
+      diagnostics `gl_ps3_dump_dlight`, `gl_ps3_dlight_probe` and
+      `ps3gl_log_draw_state()` stay in the tree.
 
-      A five-mode isolation cvar (`gl_ps3_dlight_probe`, replacing the
-      confounded `gl_ps3_dlight_replace`) plus `ps3gl_log_draw_state()` in
-      `3rdparty/ps3gl/ps3gl_states.c` dump the state the lightmap passes
-      actually composite under. The old probe moved blending, texenv AND vertex
-      colour at once -- and on PS3GL the texenv selects a different *fragment
-      program* (`q3_fp_modulate` = `color*tex` vs `q3_fp_replace` = `tex`), so
-      "replace looks right, normal looks wrong" never implicated the blend unit
-      specifically. That is why five rounds did not converge.
-
-      What the probe proved on hardware:
-
-      - **`gl_overbright` was 1, on a build declaring it "0".** The pass logged
-        `src=0x0306` (`GCM_DST_COLOR`) and `color=aaaaaaff` (= 128/192), both
-        reachable only from the overbright branch. Cause: `FCVAR_READ_ONLY`
-        cannot defend an `FCVAR_GLCONFIG` cvar, because `opengl.cfg` replay goes
-        `Cvar_SetGL` -> `Cvar_FullSet` -> `Cvar_DirectFullSet`, which never calls
-        `Cvar_CanSet`. **Fixed** by dropping `FCVAR_GLCONFIG` on PS3 (see the
-        comment on the declaration in `ref/gl/gl_opengl.c`). Turning it off
-        improved the image but did not fix the flashlight.
-      - **With overbright off, every state field matches the PC reference
-        exactly**: `GL_ZERO/GL_SRC_COLOR`, texenv MODULATE, `fp_key=1`
-        (MODULATE), `tmu1` disabled, vertex colour `ffffffff`, depth `GL_EQUAL`
-        with writes off, alpha test off. This kills the RSX-blend-mismatch
-        thesis, the stale-`glColor` thesis, and the "both TMUs bound so
-        `ps3gl_shader_key()` silently picks MODULATE2" thesis.
-      - **The dynamic atlas content is correct.** `gl_ps3_dump_dlight 1`
-        produced a 128x11 RGBA page that is 60% distinctly warm lightmap data
-        with saturated highlights and only 1.4% near-neutral texels. Wrong
-        texcoords would therefore still land on warm pixels.
-      - Uninitialized VRAM is NOT in play: `glTexImage2D` with `pixels == NULL`
-        memsets to zero in `ps3gl_textures.c`, so the 117 never-uploaded rows of
-        the 128x128 `tr.dlightTexture` are black, not garbage.
-
-      **Do not build `tools/ps3_blendtest`** (the old resume point). The blend
-      state was exonerated from inside the real pipeline, which is strictly
-      better evidence than a synthetic panel test.
-
-      **Resume point:** every stage from luxel to framebuffer is now
-      individually verified correct while the composite is still visibly wrong,
-      so single-sided probing has run out. Get a like-for-like PC reference --
-      same map, same viewpoint, `gl_overbright 0`, screenshots at `r_lightmap 0`
-      and `r_lightmap 1`, plus a PC atlas dump if available -- and diff against
-      the PS3 at the same spot. Note when reading `r_lightmap 1` that it only
-      disables the *blend*; the base-texture pass still draws, so flat grey
-      faces in that mode may just be surfaces absent from any lightmap chain,
-      not artifacts. Three separate misreadings of gameplay stills happened in
-      this round; insist on the reference comparison instead.
+      **Lesson: per-stage probes cannot see an ordering bug.** Each stage
+      from luxel to blend state was correct in isolation; the fault was WHEN
+      the RSX read the texture relative to the CPU writes. Any texture that
+      ps3gl updates more than once per frame has the same hazard: give each
+      update its own storage, or fence with `ps3gl_wait_idle()` first.
 
 Work ONLY the top unchecked item. Do not implement future items speculatively.
 
