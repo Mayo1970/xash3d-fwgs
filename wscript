@@ -8,7 +8,6 @@ import clang_format
 import sys
 import os
 
-# we need version 17 minimum
 clang_format.CLANG_FORMAT_MIN_MAJOR = 17
 
 VERSION = '0.99'
@@ -112,21 +111,23 @@ SUBDIRS = [
 	Subproject('3rdparty/MultiEmulator',lambda x: x.env.CLIENT),
 	Subproject('hlsdk-portable/game_shared'),
 	# Exactly one row supplies waf name 'server': ReGameDLL_CS for cstrike, tf15-client/dlls for tfc,
-	# ricochet/dlls (Valve's ricochet/ merged onto hlsdk-portable) for ricochet.
-	Subproject('hlsdk-portable/dlls',   lambda x: x.env.PS3_GAME not in ('cstrike', 'tfc', 'ricochet')),
+	# ricochet/dlls (Valve's ricochet/ merged onto hlsdk-portable) for ricochet, decay-hlsdk for decay.
+	Subproject('hlsdk-portable/dlls',   lambda x: x.env.PS3_GAME not in ('cstrike', 'tfc', 'ricochet', 'decay')),
 	Subproject('regamedll/dlls',        lambda x: x.env.PS3_GAME == 'cstrike'),
 	Subproject('tf15-client/dlls',      lambda x: x.env.PS3_GAME == 'tfc'),
 	Subproject('ricochet/dlls',         lambda x: x.env.PS3_GAME == 'ricochet'),
-	# Exactly one row supplies waf name 'client'. CS, TFC and Ricochet swap the whole client tree;
+	Subproject('decay-hlsdk/dlls',      lambda x: x.env.PS3_GAME == 'decay'),
+	# Exactly one row supplies waf name 'client'. CS, TFC, Ricochet and Decay swap the whole client tree;
 	# PS3_GAME is unset outside PS3 flavor builds, so everything else keeps the hlsdk client.
-	Subproject('hlsdk-portable/cl_dll',  lambda x: x.env.CLIENT and x.env.PS3_GAME not in ('cstrike', 'tfc', 'ricochet')),
+	Subproject('hlsdk-portable/cl_dll',  lambda x: x.env.CLIENT and x.env.PS3_GAME not in ('cstrike', 'tfc', 'ricochet', 'decay')),
 	Subproject('cs16-client/cl_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME == 'cstrike'),
-	# TFC-5 openvgui pair, linked into the TFC and Ricochet clients via use= (not a reloc module,
-	# see tf15-client/3rdparty/vgui_support/wscript). Ricochet's disc HUD is VGUI1 too.
-	Subproject('tf15-client/3rdparty/vgui_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME in ('tfc', 'ricochet')),
-	Subproject('tf15-client/3rdparty/vgui_support', lambda x: x.env.CLIENT and x.env.PS3_GAME in ('tfc', 'ricochet')),
+	# TFC-5 openvgui pair, linked into the TFC, Ricochet and Decay clients via use= (not a reloc module,
+	# see tf15-client/3rdparty/vgui_support/wscript). Ricochet's disc HUD and Decay's notepad are VGUI1 too.
+	Subproject('tf15-client/3rdparty/vgui_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME in ('tfc', 'ricochet', 'decay')),
+	Subproject('tf15-client/3rdparty/vgui_support', lambda x: x.env.CLIENT and x.env.PS3_GAME in ('tfc', 'ricochet', 'decay')),
 	Subproject('tf15-client/cl_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME == 'tfc'),
 	Subproject('ricochet/cl_dll',        lambda x: x.env.CLIENT and x.env.PS3_GAME == 'ricochet'),
+	Subproject('decay-hlsdk/cl_dll',     lambda x: x.env.CLIENT and x.env.PS3_GAME == 'decay'),
 	Subproject('engine'), # keep latest for static linking
 ]
 
@@ -144,10 +145,11 @@ PS3_FLAVORS = {
 	'ricochet':('Xash3D FWGS (Ricochet)',        'XASHRC000', 'icons/ricochet/ICON0.PNG', 'build_ricochet'),
 	'cstrike': ('Xash3D FWGS (Counter-Strike)',  'XASHCS000', 'icons/cs/ICON0.PNG',  'build_cs'),
 	'tfc':     ('Xash3D FWGS (Team Fortress Classic)', 'XASHTF000', 'icons/tf/ICON0.PNG', 'build_tfc'),
+	'decay':   ('Xash3D FWGS (Half-Life: Decay)', 'XASHDC000', 'icons/decay/ICON0.PNG', 'build_decay'),
 }
 
 # #ifdef gates inside the shared hlsdk-portable tree (bshift, opforfixed as gearbox); extra entity
-# symbols go in dlls/exports_<gamedir>.txt. cstrike, tfc and ricochet swap whole trees instead.
+# symbols go in dlls/exports_<gamedir>.txt. cstrike, tfc, ricochet and decay swap whole trees instead.
 PS3_GAME_DEFINES = {
 	'bshift':   ['BSHIFT'],
 	'gearbox':  ['OPFOR'],
@@ -344,11 +346,9 @@ def configure(conf):
 		conf.env.append_unique('CXXFLAGS_cxxshlib', ['-fPIC', '-fno-use-cxa-atexit'])
 		conf.env.append_unique('LINKFLAGS_cshlib', ['-nostdlib', '-Wl,--unresolved-symbols=ignore-all'])
 		conf.env.append_unique('LINKFLAGS_cxxshlib', ['-nostdlib', '-Wl,--unresolved-symbols=ignore-all'])
-	# check if we need to use irix linkflags
 	elif conf.env.DEST_OS == 'irix' and conf.env.COMPILER_CC == 'gcc':
 		linkflags.remove('-Wl,--no-undefined')
 		linkflags.append('-Wl,-u,gl_INTERPRET_END')
-		# check if we're in a sgug environment
 		if 'sgug' in os.environ['LD_LIBRARYN32_PATH']:
 			linkflags.append('-lc')
 	elif conf.env.DEST_OS == 'darwin':
@@ -626,7 +626,6 @@ int main(void) { return !opus_custom_encoder_init((OpusCustomEncoder *)1, (const
 
 				conf.env.HAVE_SYSTEM_OPUS = conf.check_cc(msg='Checking if opus supports custom modes', defines='CUSTOM_MODES=1', use='opus werror', fragment=frag, mandatory=False)
 
-			# search for bzip2
 			BZIP2_CHECK='''#include <bzlib.h>
 int main(void) { return (int)BZ2_bzlibVersion(); }'''
 
@@ -641,7 +640,6 @@ int main(void) { return (int)BZ2_bzlibVersion(); }'''
 		conf.add_subproject(i.name)
 
 def build(bld):
-	# enable progress bar mode if stdout is a terminal
 	if not bld.progress_bar and sys.stdout.isatty():
 		bld.progress_bar = 1
 

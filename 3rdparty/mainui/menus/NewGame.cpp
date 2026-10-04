@@ -1,22 +1,5 @@
-/*
-Copyright (C) 1997-2001 Id Software, Inc.
-
-This program is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License
-as published by the Free Software Foundation; either version 2
-of the License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-
-See the GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
-
-*/
+// Copyright (C) 1997-2001 Id Software, Inc.
+// GPLv2 or later, WITHOUT ANY WARRANTY; see the GNU General Public License.
 
 #include "CheckBox.h"
 #include "EventSystem.h"
@@ -60,11 +43,6 @@ private:
 	CMenuCheckBox startDemoChapter;
 };
 
-/*
-=================
-CMenuNewGame::StartGame
-=================
-*/
 void CMenuNewGame::StartGame( uintptr_t skill )
 {
 	if( EngFuncs::GetCvarFloat( "host_serverstate" ) && EngFuncs::GetCvarFloat( "maxplayers" ) > 1 )
@@ -78,6 +56,18 @@ void CMenuNewGame::StartGame( uintptr_t skill )
 	EngFuncs::CvarSetValue( "coop", 0.0f );
 
 	EngFuncs::PlayBackgroundTrack( NULL, NULL );
+
+	// Decay has no single-player mode: its partner bot needs a second slot. Same three-frame
+	// wait as Create Server so maxplayers latches before the map starts.
+	if( !stricmp( gMenu.m_gameinfo.gamefolder, "decay" ))
+	{
+		char map[256], cmd[512];
+
+		Com_EscapeCommand( map, startDemoChapter.bChecked ? gMenu.m_gameinfo.demomap : gMenu.m_gameinfo.startmap, sizeof( map ));
+		snprintf( cmd, sizeof( cmd ), "disconnect;menu_connectionprogress localserver;wait;wait;wait;maxplayers 2;latch;map %s\n", map );
+		EngFuncs::ClientCmd( false, cmd );
+		return;
+	}
 
 	if( startDemoChapter.bChecked )
 		EngFuncs::ClientCmdF( false, "newgame \"%s\"\n", gMenu.m_gameinfo.demomap );
@@ -99,11 +89,6 @@ void CMenuNewGame::ShowDialogCb( CMenuBaseItem *pSelf, void *pExtra )
 	ui->msgBox.Show();
 }
 
-/*
-=================
-CMenuNewGame::Init
-=================
-*/
 void CMenuNewGame::_Init( void )
 {
 	AddItem( banner );

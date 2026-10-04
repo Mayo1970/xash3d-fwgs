@@ -2157,12 +2157,16 @@ configure fails loudly on an unknown gamedir, a `TITLE_ID` that isn't exactly
 ./waf configure --ps3 --gamedir=ricochet --static-linking=... # ricochet-> XASHRC000, build_ricochet/
 ./waf configure --ps3 --gamedir=cstrike --static-linking=...  # cstrike -> XASHCS000, build_cs/
 ./waf configure --ps3 --gamedir=tfc --static-linking=...      # tfc     -> XASHTF000, build_tfc/
+./waf configure --ps3 --gamedir=decay --static-linking=...    # decay   -> XASHDC000, build_decay/
 ```
 
 `ricochet` swaps whole source trees like `cstrike`/`tfc`: `name='server'` is
 `ricochet/dlls`, `name='client'` is `ricochet/cl_dll` (linked with TFC-5's
 `tf15-client/3rdparty/{vgui_dll,vgui_support}` pair), and the menu stays the
 stock `3rdparty/mainui`. See "Ricochet flavor" (RC-2) below.
+
+`decay` has the same shape: `decay-hlsdk/dlls` and `decay-hlsdk/cl_dll` (the
+same TFC-5 VGUI pair), stock `3rdparty/mainui`. See "Decay flavor" below.
 
 `cstrike` is different in kind. Counter-Strike is not an hlsdk-portable variant,
 so the flavor **swaps whole source trees** instead of gating one with a define.
@@ -4191,9 +4195,18 @@ Goal ladder:
     `exports.txt` = 4 API names + 148 entities (taken from the preprocessor,
     `trip_beam` is `#if`'d out).
   - Client: hlsdk-portable's client with `USE_VGUI=1` as the base, plus
-    Ricochet's own `view.cpp` (chase cam), `StudioModelRenderer`/
+    Ricochet's own `StudioModelRenderer`/
     `GameStudioModelRenderer`, `ev_hldm`, `hl/*`, `Ricochet_JumpPads`,
-    `vgui_discobjects`. Hand-ported additions: StartRnd/EndRnd/Powerup/
+    `vgui_discobjects`. `view.cpp`/`in_camera.cpp` stay hlsdk-portable's
+    (its `hud_spectator` needs them). Ricochet is first-person; its only
+    third-person view is the fall-death camera (`health == -5`, set by
+    `trigger_fall`), hand-ported into `V_CalcNormalRefdef` along with
+    removing the multiplayer third-person block. `OBS_LOCKEDVIEW` shares
+    `OBS_IN_EYE`'s value 4, so `V_CalcRefdef` routes it to the normal view.
+    Scoreboard follows Ricochet: QUEUE/WINS/POINTS (server sends queue
+    position in `playerclass`, wins in `deaths`), disc-coloured rows. Kill
+    feed colours by team name (`GetClientColor` can return NULL).
+    Hand-ported additions: StartRnd/EndRnd/Powerup/
     Reward/Frozen hooks and viewport handlers, `g_iArenaMode`, disc icons in
     `paintBackground`, hidden ammo/battery/flashlight HUD, freeze icon,
     locked-spectator look block (also in `input_xash3d.cpp`), render-state
@@ -4222,6 +4235,83 @@ Goal ladder:
 
 Not yet checked in detail: `particleman` (submodule, `USE_PARTICLEMAN`-gated
 across 6 files, skippable for v1, matches CS's optional-extras precedent).
+
+### Decay flavor (`--gamedir=decay`, XASHDC000, `build_decay/`)
+
+Plan, evidence and risk register: `DECAYFLAVOR.md` (DECAY-0..9). Decisions
+taken 2026-10-04: source pin `024a82aa`, TFC VGUI pair (not FreeVGUI),
+`XASHDC000`, `icons/decay/ICON0.PNG` is a TEMPORARY copy of the HL1 icon,
+`decay-hlsdk/` is tracked. Still open: DECAYFLAVOR.md decisions 5-10.
+
+- **DECAY-0..3 first link -- WRITTEN 2026-10-04, NOT BUILT by waf, awaiting
+  the user's build and hardware test.**
+  - Source: `git -c core.autocrlf=false archive 024a82aa` of
+    `E:/Users/Matteo/Desktop/HL1/Decay/hlsdk-portable` (local merge of
+    origin/master `c95f56a1` + origin/decay-pc `71bddfef`), LF. Taken:
+    `dlls cl_dll common engine public pm_shared game_shared external/openbsd`,
+    LICENSE, README.md, mod_options.txt, how_to_play.txt. Dropped: CMake files,
+    `dlls/hl.def`, `dlls/replace.sh`, `game_shared/wscript`. Decay's
+    `utils/vgui/include` is not vendored: the client compiles against
+    `tf15-client/3rdparty/vgui_dll/include` (ABI-identical).
+  - PS3 edits in `decay-hlsdk/`: `public/build.h` `__PPU__` branch and
+    `common/mathlib.h` `isnan` (both now identical to `hlsdk-portable/`);
+    stock memcpy aliasing fixes in `dlls/util.cpp`, `cl_dll/com_weapons.cpp`,
+    `cl_dll/demo.cpp`, `cl_dll/hud.cpp`; `zombie.cpp` logical-op; `entity.cpp`
+    `<string.h>`; goal-13 `voice_banmgr.cpp` LittleToHostSW (the stock tree
+    later deleted that file, Decay's VGUI client compiles it);
+    `decay_gamerules.cpp` `Platform_GetComputerName` returns `"localhost"` on
+    PS3 (no `gethostname` on PSL1GHT; save-magic policy is DECAY-6). Nothing
+    else: PS3_Diag and ps3gl studio telemetry were deliberately not ported.
+  - `dlls/wscript`/`cl_dll/wscript` reproduce upstream's source sets exactly
+    (117 server TUs, 89 client TUs), with mod_options ON defines, Decay's GCC
+    defines, `-fno-strict-aliasing`, `-mminimal-toc`, `-fno-exceptions`,
+    `-Wno-invalid-offsetof`. No `INTERNAL_VGUI_SUPPORT`/`GOLDSOURCE_SUPPORT`
+    in the client.
+  - `dlls/exports.txt` = 3 API names + 296 classnames (299), from the compiled
+    objects; `my_monster`/`trip_beam` are `#if`'d out; `trigger_autobot` is
+    created by name in `CWorld::Precache`. `Server_GetPhysicsInterface` not
+    exported (same as stock). `cl_dll/exports.txt` = stock 43 +
+    `HUD_ChatInputPosition` + `InitVGUISupportAPI` (45).
+  - **`RENAME_COMDAT_GROUPS` is ON for decay** (`xshlib.py`). One tree does not
+    mean one class per name: client VGUI `CNotepad : CMenuPanel` and server
+    `func_notepad` `CNotepad : CBaseToggle` share group `_ZTV8CNotepad`
+    (0x440 vs 0x210 bytes). Without the rename one vtable is lost silently.
+  - Verified with a scratch compile/link probe (real `ppu-g++` 7.2, `-O3`, the
+    project's `-Werror=` set, `ld -r -d` + `objcopy -G`, repo mounted
+    read-only, no waf): 0 failed TUs, all exports defined, unresolved only
+    `g_VCSInfo_*`. Not covered: the final EBOOT link.
+  - Known, not fixed (no approval yet): `dlls/triggers.cpp:3359` `ArrayToByte`
+    ORs bits into an uninitialized `byte Result` (`trigger_bit_counter`).
+  - **HW round 1 (2026-10-04), UDP log:** boots as XASHDC000 with `-game decay`,
+    the Decay server (`pfnGameInit`) and client load, `dy_accident1` loads and
+    runs (`MsgFunc_GameMode` from the Decay client), clean XMB exit. Largest
+    free block 144 MB at boot, 47.6 MB after precache. `trigger_autobot` ->
+    forwarded `addbot` -> `BotCreate` works, but refused "Max. Players
+    reached" because New Game had set `maxplayers 1`. `monster_generic_bkup`
+    has no spawn function in retail `decay.dll` either. Two failures, fixed
+    and awaiting round 2:
+    - **Invisible menu buttons.** Decay ships `gfx/shell/btns_main.bmp`
+      (8-bit, palette alpha bytes all 0; no other flavor ships one). ref_gl
+      uploads it with an RGB internal format, but `ps3gl` ignored
+      `internalformat` and kept A=0, so `PIC_DrawAdditive` (`GL_SRC_ALPHA,
+      GL_ONE`) drew nothing. Fix (all flavors): `ps3gl_textures.c` ORs
+      A=0xFF for `GL_RGB`/`GL_RGB5`/`GL_RGB8`/3, recorded per texture
+      (`opaque`) for `glTexSubImage2D`. `glCopyTexSubImage2D` not covered.
+    - **New Game -> partner slot (decision 10, user chose code).**
+      `3rdparty/mainui/menus/NewGame.cpp`: for gamefolder `decay`, New Game
+      runs Create Server's sequence (`maxplayers 2;latch;map <startmap>`) in
+      place of `newgame`; the engine then sets `deathmatch 1`, as a retail
+      LAN server does.
+  - **HW round 2 (2026-10-04): both fixes HW-VALIDATED.** Menu buttons
+    visible; New Game loads `dy_accident1` as a 2-slot server and Colette
+    joins. `latch` is not an engine command (harmless warning, mainui's Create
+    Server sends it too). The partner standing still is retail behavior:
+    `CBot::BotThink` forces `f_move_speed = 0` ("disable movement for Decay")
+    and only turns/shoots at enemies. Moving her needs `changeplayer`, which
+    has no PS3 binding yet (DECAY-5, DECAYFLAVOR.md decision 5).
+- **DECAY-4..9**: see DECAYFLAVOR.md. First map needs Create Server with
+  `maxplayers` >= 2: retail `liblist.gam` is `type "Multi"`, so mainui's New
+  Game sets `maxplayers 1` and the partner bot gets no slot (decision 10).
 
 ## 8. Repo layout after the 2026-08-04 cleanup
 

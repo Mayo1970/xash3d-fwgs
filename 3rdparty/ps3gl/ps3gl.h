@@ -87,8 +87,8 @@ typedef struct {
     uint8_t         num_levels; /* contiguous mip levels uploaded so far, >=1 */
     uint8_t         swizzled;   /* Morton-ordered, tightly packed levels, no pitch. */
     uint8_t         alloc_levels; /* mip levels `data` was actually sized for, >=1 */
-                                /* Both fixed when `data` is allocated: its size depends on them, and
-                                 * gl_ps3_swizzle/gl_ps3_mipmap can change between two uploads. */
+                                /* both fixed at allocation: size depends on them, cvars can change later */
+    uint8_t         opaque;     /* RGB internal format: GL samples alpha as 1, so texels store A=255 */
     uint8_t         wrap_s, wrap_t;
     uint8_t         min_filter, mag_filter;
     gcmTexture      gcm_tex;

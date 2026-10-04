@@ -1,0 +1,95 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+# Decay client: upstream Decay cl_dll source set; VGUI1 is TFC-5's openvgui pair, linked through use=.
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	# upstream applies one excl list to both globs, so only these entries ever match
+	source = bld.path.ant_glob('**/*.cpp', excl=['GameStudioModelRenderer_Sample.cpp'])
+	source += bld.path.parent.ant_glob('game_shared/*.cpp', excl=[
+		'game_shared/voice_vgui_tweakdlg.cpp',
+		'game_shared/voice_gamemgr.cpp',
+		'game_shared/voice_status.cpp',
+	])
+	source += bld.path.parent.ant_glob([
+		'public/safe_snprintf.c',
+		'pm_shared/*.c',
+		'dlls/crossbow.cpp',
+		'dlls/crowbar.cpp',
+		'dlls/egon.cpp',
+		'dlls/gauss.cpp',
+		'dlls/glock.cpp',
+		'dlls/handgrenade.cpp',
+		'dlls/hornetgun.cpp',
+		'dlls/mp5.cpp',
+		'dlls/python.cpp',
+		'dlls/rpg.cpp',
+		'dlls/satchel.cpp',
+		'dlls/shotgun.cpp',
+		'dlls/squeakgrenade.cpp',
+		'dlls/tripmine.cpp',
+		'dlls/decay/vorti.cpp',
+	])
+
+	if not bld.env.HAVE_STRLCPY:
+		source += bld.path.parent.ant_glob('external/openbsd/strlcpy.c')
+
+	if not bld.env.HAVE_STRLCAT:
+		source += bld.path.parent.ant_glob('external/openbsd/strlcat.c')
+
+	# mod_options.txt ON options plus the GCC defines of Decay's root wscript.
+	# No GOLDSOURCE_SUPPORT: input_goldsource.cpp then compiles to nothing (no dlopen).
+	defines = [
+		'CLIENT_DLL',
+		'CLIENT_WEAPONS',
+		'CROWBAR_FIX_RAPID_CROWBAR',
+		'SPEAKABLE_TARGETS',
+		'HD_HUD_DEFAULT',
+		'_LINUX',
+		'LINUX',
+		'stricmp=strcasecmp',
+		'strnicmp=strncasecmp',
+		'_snprintf=snprintf',
+		'_vsnprintf=vsnprintf',
+	]
+
+	# TFC's VGUI headers stand in for Decay's unvendored utils/vgui/include (same ABI, DECAYFLAVOR.md)
+	includes = [
+		'.',
+		'../dlls',
+		'../common',
+		'../engine',
+		'../pm_shared',
+		'../game_shared',
+		'../public',
+		'../../tf15-client/3rdparty/vgui_dll/include',
+	]
+
+	flags = ['-fno-strict-aliasing']
+
+	# ~90 translation units plus the VGUI stlibs share one PPC64 .toc
+	if bld.env.DEST_OS == 'ps3':
+		flags += ['-mminimal-toc']
+
+	cxxflags = flags + ['-fno-exceptions', '-Wno-invalid-offsetof']
+
+	bld.shlib(
+		source   = source,
+		target   = 'client',
+		name     = 'client',
+		features = 'c cxx',
+		includes = includes,
+		defines  = defines,
+		cflags   = flags,
+		cxxflags = cxxflags,
+		# consumer before dependency for ld -r archive resolution
+		use      = ['vcs_info', 'werror', 'yy_thunks', 'vgui_support', 'vgui'],
+		install_path = None,
+		idx = bld.get_taskgen_count()
+	)
