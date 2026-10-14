@@ -29,13 +29,7 @@ GNU General Public License for more details.
 #include "cursor_type.h"
 #include "key_modifiers.h"
 
-/*
-==============================================================================
-
-                       SYSTEM UTILS
-
-==============================================================================
-*/
+// SYSTEM UTILS
 double Platform_DoubleTime( void );
 void Platform_Sleep( int msec );
 void Platform_ShellExecute( const char *path, const char *parms );
@@ -256,14 +250,8 @@ static inline qboolean Platform_LibraryExists( const char *name, qboolean gamedi
 }
 
 
-/*
-==============================================================================
-
-			MOBILE API
-
-==============================================================================
-*/
-#if XASH_SDL >= 2
+// MOBILE API
+#if XASH_SDL >= 2 || XASH_PS3 // PS3: DS3 rumble in in_ps3.c
 void Platform_Vibrate( float life, char flags ); // left for compatibility
 void Platform_Vibrate2( float time, int low_freq, int high_freq, uint flags );
 #else
@@ -271,13 +259,7 @@ static inline void Platform_Vibrate( float life, char flags ) {}
 static inline void Platform_Vibrate2( float time, int low_freq, int high_freq, uint flags ) {}
 #endif
 
-/*
-==============================================================================
-
-			INPUT
-
-==============================================================================
-*/
+// INPUT
 #if XASH_SDL // only SDL based backends implements these functions
 void Platform_PreCreateMove( void );
 void GAME_EXPORT Platform_GetMousePos( int *x, int *y );
@@ -295,12 +277,8 @@ static inline int Platform_GetClipboardText( char *buffer, size_t size ) { retur
 static inline void Platform_SetClipboardText( const char *buffer ) { }
 static inline qboolean Platform_GetMouseGrab( void ) { return false; }
 #if XASH_PS3
-// real implementations in in_ps3.c -- feed the right-stick menu cursor, and
-// track whether the native menu or a VGUI1 panel currently wants it shown
-// (VGui_IsActive()-driven callers, e.g. vgui_draw.c's VGUI_CursorSelect,
-// call Platform_SetCursorType per-panel; without a real PS3 implementation
-// here this was silently dropped, so PS3_UpdateMenuCursor/PS3_CursorVisible
-// only ever saw the native-menu key_dest transition, never a VGUI1 panel).
+// in_ps3.c: the stick menu cursor; VGUI1 panels call Platform_SetCursorType (e.g. VGUI_CursorSelect),
+// which a stub dropped, so the cursor only ever saw the native menu's key_dest change
 void GAME_EXPORT Platform_GetMousePos( int *x, int *y );
 void Platform_SetCursorType( VGUI_DefaultCursor type );
 #else
@@ -361,13 +339,7 @@ static inline char *Platform_Input( void )
 #endif
 }
 
-/*
-==============================================================================
-
-			WINDOW MANAGEMENT
-
-==============================================================================
-*/
+// WINDOW MANAGEMENT
 typedef enum
 {
 	rserr_ok,
@@ -401,9 +373,7 @@ void Platform_Minimize_f( void );
 ref_window_type_t R_GetWindowHandle( void **handle, ref_window_type_t type );
 void VID_Info_f( void );
 
-//
 // in_evdev.c
-//
 #if XASH_USE_EVDEV
 void Evdev_SetGrab( qboolean grab );
 void Evdev_Shutdown( void );
@@ -412,39 +382,30 @@ void IN_EvdevMove( float *yaw, float *pitch );
 void IN_EvdevFrame ( void );
 #endif // XASH_USE_EVDEV
 
-//
 // in_ps3.c
-//
 #if XASH_PS3
 void PS3_InputInit( void );
 void PS3_InputShutdown( void );
 void PS3_MenuDrawCursor( void );
+void PS3_ApplyModPadBinds( void );
 #endif // XASH_PS3
-/*
-==============================================================================
 
-			AUDIO INPUT/OUTPUT
-
-==============================================================================
-*/
+// AUDIO INPUT/OUTPUT
 // initializes cycling through a DMA buffer and returns information on it
 qboolean SNDDMA_Init( void );
 void SNDDMA_Shutdown( void );
 void SNDDMA_BeginPainting( void );
 void SNDDMA_Submit( void );
 void SNDDMA_Activate( qboolean active ); // pause audio
-// void SNDDMA_PrintDeviceName( void ); // unused
-// void SNDDMA_LockSound( void ); // unused
-// void SNDDMA_UnlockSound( void ); // unused
+// unused: SNDDMA_PrintDeviceName, SNDDMA_LockSound, SNDDMA_UnlockSound
 
 qboolean VoiceCapture_Init( void );
 void VoiceCapture_Shutdown( void );
 qboolean VoiceCapture_Activate( qboolean activate );
 qboolean VoiceCapture_Lock( qboolean lock );
 
-// this allows to make break in current line, without entering libc code
-// libc built with -fomit-frame-pointer may just eat stack frame (hello, glibc), making entering libc even more useless
-// calling syscalls directly allows to make break like if it was asm("int $3") on x86
+// break on the current line without entering libc (built with -fomit-frame-pointer it can eat the
+// stack frame, hello glibc): direct syscalls behave like asm("int $3") on x86
 #if XASH_LINUX && XASH_X86
 	#define INLINE_RAISE(x) asm volatile( "int $3;" );
 	#define INLINE_NANOSLEEP1() // nothing!

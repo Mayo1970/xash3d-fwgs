@@ -1,0 +1,86 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+# Ricochet client: hlsdk-portable's USE_VGUI client plus Valve's Ricochet HUD, camera,
+# renderer and disc prediction; VGUI1 is TFC-5's openvgui pair, linked through use=.
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	sdk = bld.path.parent.parent.find_dir('hlsdk-portable')
+
+	# MOTD.cpp and scoreboard.cpp are the non-VGUI fallbacks, upstream skips them with VGUI on
+	excluded_files = [
+		'MOTD.cpp',
+		'scoreboard.cpp',
+	]
+
+	source = bld.path.ant_glob('**/*.cpp', excl=excluded_files)
+	source += bld.path.parent.ant_glob([
+		'dlls/wpn_shared/*.cpp',
+		'pm_shared/*.c',
+		'game_shared/vgui_checkbutton2.cpp',
+		'game_shared/vgui_grid.cpp',
+		'game_shared/vgui_helpers.cpp',
+		'game_shared/vgui_listbox.cpp',
+		'game_shared/vgui_loadtga.cpp',
+		'game_shared/vgui_scrollbar2.cpp',
+		'game_shared/vgui_slider2.cpp',
+		'game_shared/voice_banmgr.cpp',
+	])
+	source += sdk.ant_glob('public/safe_snprintf.c')
+
+	if not bld.env.HAVE_STRLCPY:
+		source += sdk.ant_glob('external/openbsd/strlcpy.c')
+
+	if not bld.env.HAVE_STRLCAT:
+		source += sdk.ant_glob('external/openbsd/strlcat.c')
+
+	defines = [
+		'CLIENT_DLL',
+		'CLIENT_WEAPONS',
+		'SPEAKABLE_TARGETS',
+		'USE_VGUI=1',
+		'_LINUX',
+		'stricmp=strcasecmp',
+		'strnicmp=strncasecmp',
+		'_snprintf=snprintf',
+		'_vsnprintf=vsnprintf',
+	]
+
+	includes = [
+		'.',
+		'../dlls',
+		'../../hlsdk-portable/common',
+		'../../hlsdk-portable/engine',
+		'../pm_shared',
+		'../game_shared',
+		'../../hlsdk-portable/public',
+		'../../hlsdk-portable/game_shared', # vcs_info.h only; ours above wins
+		'../../tf15-client/3rdparty/vgui_dll/include',
+	]
+
+	flags = ['-fno-strict-aliasing']
+
+	# ~110 translation units plus the VGUI stlibs share one PPC64 .toc
+	if bld.env.DEST_OS == 'ps3':
+		flags += ['-mminimal-toc']
+
+	bld.shlib(
+		source   = source,
+		target   = 'client',
+		name     = 'client',
+		features = 'c cxx',
+		includes = includes,
+		defines  = defines,
+		cflags   = flags,
+		cxxflags = flags,
+		# consumer before dependency for ld -r archive resolution
+		use      = ['vcs_info', 'werror', 'yy_thunks', 'vgui_support', 'vgui'],
+		install_path = None,
+		idx = bld.get_taskgen_count()
+	)

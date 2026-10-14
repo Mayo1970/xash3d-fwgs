@@ -46,13 +46,16 @@ static CVAR_DEFINE_AUTO( kb_debug, "0", 0, "log PS3 USB keyboard reads" );
 static CVAR_DEFINE_AUTO( joy_cursor, "1", FCVAR_ARCHIVE, "analog-stick menu cursor (0 = stick steps menu items)" );
 static CVAR_DEFINE_AUTO( joy_cursor_speed, "1400", FCVAR_ARCHIVE, "menu cursor speed, pixels/sec" );
 
+// Bump when the engine's default pad layout changes; PS3_MigratePadBinds moves old configs once.
+#define PS3_PAD_LAYOUT_VERSION 1
+static CVAR_DEFINE_AUTO( joy_binds_version, "0", FCVAR_ARCHIVE, "pad layout version the saved binds were migrated to" );
+static CVAR_DEFINE_AUTO( hud_scale_version, "0", FCVAR_ARCHIVE, "hud_scale default version the saved config was migrated to" );
+
 static float    ps3_cursor_x, ps3_cursor_y;
 static double   ps3_cursor_last_move;
 static qboolean ps3_cursor_valid;
-// Set from Platform_SetCursorType() -- true whenever the engine's native
-// menu OR a VGUI1 panel (team select, class select, MOTD, scoreboard, ...)
-// currently wants a visible/movable cursor. VGUI1 panels open over live
-// gameplay, not through key_dest, so key_dest==key_menu alone misses them.
+// Set by Platform_SetCursorType(): the menu or a VGUI1 panel wants a cursor. VGUI1 panels
+// open over live gameplay, not through key_dest, so key_dest==key_menu alone misses them.
 static qboolean ps3_wants_cursor;
 static qboolean ps3_cross_is_mouse; // current CROSS press was emitted as K_MOUSE1
 
@@ -72,10 +75,8 @@ static const int ps3_key_map[NUM_PS3_DIGITAL_BUTTONS] =
 	K_DPAD_UP, K_DPAD_DOWN,
 };
 
-// Bind a key only if the player has not already bound it. keynum is a plain
-// lowercase ASCII char. Called after config.cfg has executed (see
-// Platform_RunEvents), so an explicit user bind -- or an unbindall that leaves
-// the key clear on purpose -- always wins.
+// Bind a key only if config.cfg left it empty. Runs after config.cfg (see
+// Platform_RunEvents), so an explicit user bind always wins.
 static void PS3_DefaultBind( int keynum, const char *cmd )
 {
 	const char *cur = Key_GetBinding( keynum );
@@ -94,14 +95,69 @@ static void PS3_ModRebind( int keynum, const char *stock_default, const char *cm
 		Key_SetBinding( keynum, cmd );
 }
 
-// The engine's keynames[] table only ships the classic arrow-key layout. A PS3
-// has no easy way to open the controls menu with a keyboard attached, so seed a
-// standard WASD + action layout here. Mod-specific keys are added per gamedir.
+// Unlike PS3_ModRebind, an empty key stays empty: the player may have unbound it.
+static void PS3_MigrateBind( int keynum, const char *old_default, const char *cmd )
+{
+	const char *cur = Key_GetBinding( keynum );
+
+	if( cur && !Q_strcmp( cur, old_default ))
+		Key_SetBinding( keynum, cmd );
+}
+
+// config.cfg saves every bind, so a new default layout only reaches existing players
+// through this one-time move of keys that still hold the old default.
+static void PS3_MigratePadBinds( void )
+{
+	if( joy_binds_version.value >= PS3_PAD_LAYOUT_VERSION )
+		return;
+
+	// v1: R1 was a second invnext and D-pad left a second lastinv; nothing had invprev
+	PS3_MigrateBind( K_R1_BUTTON, "invnext", "" );
+	PS3_MigrateBind( K_DPAD_LEFT, "lastinv", "invprev" );
+
+	Cvar_DirectSetValue( &joy_binds_version, PS3_PAD_LAYOUT_VERSION );
+}
+
+// Per-gamedir pad layout over the engine defaults; also run by resetpadkeys (in_keys.c).
+void PS3_ApplyModPadBinds( void )
+{
+	const char *game = FS_Gamedir();
+
+	if( !Q_stricmp( game, "cstrike" ) || !Q_stricmp( game, "czero" ))
+	{
+		// L2/R2 reach the engine as the K_JOY1/K_JOY2 trigger axis, not K_L2_BUTTON/K_R2_BUTTON.
+		// D-pad left/right (invprev/invnext) and L1 (lastinv) stay on the engine defaults.
+		PS3_ModRebind( K_JOY1,      "+attack2",       "+speed"      ); // L2: walk
+		PS3_ModRebind( K_RSTICK,    "impulse 100",    "+attack2"    ); // R3
+		PS3_ModRebind( K_LSTICK,    "+speed",         "nightvision" ); // L3
+		PS3_ModRebind( K_DPAD_UP,   "weapon_crowbar", "buy"         );
+		PS3_ModRebind( K_DPAD_DOWN, "impulse 201",    "chooseteam"  );
+	}
+	else if( !Q_stricmp( game, "tfc" ))
+	{
+		// L1/R1 prime+throw grenades 1/2 (forwarded to the server DLL). R3 is the
+		// class special (detpipe, rocket reload, ...) instead of the flashlight.
+		PS3_ModRebind( K_L1_BUTTON, "lastinv", "+gren1" );
+		PS3_ModRebind( K_R1_BUTTON, "", "+gren2" );
+		PS3_ModRebind( K_RSTICK,    "impulse 100", "special" );
+
+		// D-pad up opens the VGUI command menu (engineer build, spy disguise/feign) for the
+		// cursor to pick from; nothing else on the pad reaches it
+		PS3_ModRebind( K_DPAD_UP,   "weapon_crowbar", "+commandmenu" );
+	}
+	else if( !Q_stricmp( game, "decay" ))
+	{
+		// swap between Gina and Colette (PC binds G); only Decay's server handles changeplayer
+		PS3_ModRebind( K_DPAD_UP,   "weapon_crowbar", "changeplayer" );
+	}
+}
+
+// keynames[] only ships the arrow-key layout and a PS3 can't easily reach the controls
+// menu with a keyboard, so seed WASD + actions here. Mod keys are added per gamedir.
 static void PS3_SeedKeyboardBinds( void )
 {
 	const char *game = FS_Gamedir();
 	qboolean is_cs = ( !Q_stricmp( game, "cstrike" ) || !Q_stricmp( game, "czero" ));
-	qboolean is_tfc = !Q_stricmp( game, "tfc" );
 
 	PS3_DefaultBind( 'w', "+forward" );
 	PS3_DefaultBind( 's', "+back" );
@@ -127,31 +183,74 @@ static void PS3_SeedKeyboardBinds( void )
 		PS3_DefaultBind( 'n', "nightvision" );
 		PS3_DefaultBind( ',', "buyammo1" );
 		PS3_DefaultBind( '.', "buyammo2" );
-
-		// CS gamepad layout. L2/R2 reach the engine as the K_JOY1/K_JOY2
-		// trigger axis, not K_L2_BUTTON/K_R2_BUTTON.
-		PS3_ModRebind( K_JOY1,      "+attack2",       "+speed"      ); // L2: walk
-		PS3_ModRebind( K_RSTICK,    "impulse 100",    "+attack2"    ); // R3
-		PS3_ModRebind( K_LSTICK,    "+speed",         "nightvision" ); // L3
-		PS3_ModRebind( K_DPAD_UP,   "weapon_crowbar", "buy"         );
-		PS3_ModRebind( K_DPAD_DOWN, "impulse 201",    "chooseteam"  );
-		PS3_ModRebind( K_DPAD_LEFT, "lastinv",        "invprev"     ); // previous weapon
-		// D-pad Right stays invnext; L1 stays lastinv (engine defaults).
 	}
 
-	if( is_tfc )
-	{
-		// L1/R1 prime+throw grenades 1/2 (forwarded to the server DLL). R3 is the
-		// class special (detpipe, rocket reload, ...) instead of the flashlight.
-		PS3_ModRebind( K_L1_BUTTON, "lastinv", "+gren1" );
-		PS3_ModRebind( K_R1_BUTTON, "invnext", "+gren2" );
-		PS3_ModRebind( K_RSTICK,    "impulse 100", "special" );
+	// migrate first, so the mod layout sees the current engine defaults
+	PS3_MigratePadBinds();
+	PS3_ApplyModPadBinds();
+}
 
-		// D-pad up taps open the VGUI command menu (engineer build, spy
-		// disguise/feign); the cursor then picks an entry. Nothing else on
-		// the pad reaches it, so Phase 4 is unusable without this.
-		PS3_ModRebind( K_DPAD_UP,   "weapon_crowbar", "+commandmenu" );
-	}
+// hud_scale is archived, so its PS3 default (cl_main.c) reaches old configs only through this
+// one-time move. Any other saved value is the player's own choice and stays.
+static void PS3_MigrateHudScale( void )
+{
+	if( hud_scale_version.value >= 1.0f )
+		return;
+
+	// v1: the default went from Off ("0") to 1.5x for TV distance
+	if( hud_scale.value == 0.0f )
+		Cvar_DirectSet( &hud_scale, hud_scale.def_string );
+
+	Cvar_DirectSetValue( &hud_scale_version, 1.0f );
+}
+
+// DS3 rumble. ioPadSetActDirect has no duration, so Platform_RunEvents stops the motors.
+static double ps3_rumble_until; // Platform_DoubleTime() stop time, 0 = motors off
+static int    ps3_rumble_port;
+
+static void PS3_SetMotors( int port, int large, qboolean small_on )
+{
+	padActParam act;
+
+	memset( &act, 0, sizeof( act ));
+	act.large_motor = (u8)large;
+	act.small_motor = small_on ? 1 : 0; // the DS3 small motor is on/off only
+	ioPadSetActDirect( port, &act );
+}
+
+static void PS3_RumbleStop( void )
+{
+	if( ps3_rumble_until == 0.0 )
+		return;
+
+	PS3_SetMotors( ps3_rumble_port, 0, false );
+	ps3_rumble_until = 0.0;
+}
+
+// Same contract as joy_sdl2.c: time in ms, a negative strength picks a random 50-100%.
+void Platform_Vibrate2( float time, int low_freq, int high_freq, uint flags )
+{
+	if( !ps3_pad_initialized || time <= 0.0f )
+		return;
+
+	if( low_freq < 0 )
+		low_freq = COM_RandomLong( 0x7FFF, 0xFFFF );
+
+	if( high_freq < 0 )
+		high_freq = COM_RandomLong( 0x7FFF, 0xFFFF );
+
+	// a reconnect can move the active pad mid-rumble; stop the old one
+	if( ps3_rumble_port != ps3_active_port )
+		PS3_RumbleStop();
+
+	PS3_SetMotors( ps3_active_port, bound( 0, low_freq >> 8, 255 ), high_freq > 0 );
+	ps3_rumble_port = ps3_active_port;
+	ps3_rumble_until = Platform_DoubleTime() + time / 1000.0;
+}
+
+void Platform_Vibrate( float life, char flags )
+{
+	Platform_Vibrate2( life, -1, -1, flags );
 }
 
 void PS3_InputInit( void )
@@ -169,6 +268,8 @@ void PS3_InputInit( void )
 	Cvar_RegisterVariable( &kb_debug );
 	Cvar_RegisterVariable( &joy_cursor );
 	Cvar_RegisterVariable( &joy_cursor_speed );
+	Cvar_RegisterVariable( &joy_binds_version );
+	Cvar_RegisterVariable( &hud_scale_version );
 
 	memset( ps3_btn_prev, 0, sizeof( ps3_btn_prev ));
 	ps3_active_port = 0;
@@ -180,6 +281,7 @@ void PS3_InputInit( void )
 
 void PS3_InputShutdown( void )
 {
+	PS3_RumbleStop();
 	ioPadEnd();
 	KB_Shutdown();
 	Mouse_Shutdown();
@@ -227,9 +329,8 @@ static short PS3_ScaleTrigger( unsigned int raw )
 	return (short)value;
 }
 
-// Cursor shows in the native menu or whenever a VGUI1 panel wants one, and
-// only for a few seconds after the last stick motion -- so d-pad navigation
-// is never fighting a stale pointer.
+// Cursor shows in the menu or when a VGUI1 panel wants one, and only for a few seconds
+// after the last stick motion, so d-pad navigation never fights a stale pointer.
 static qboolean PS3_CursorVisible( void )
 {
 	return joy_cursor.value != 0.0f
@@ -238,16 +339,12 @@ static qboolean PS3_CursorVisible( void )
 		&& ( host.realtime - ps3_cursor_last_move ) < 3.0;
 }
 
-// Called by the engine (via Platform_SetCursorType, declared in platform.h)
-// whenever the native menu or a VGUI1 panel changes its desired cursor --
-// dc_none means "nothing wants a cursor right now."
+// Called when the menu or a VGUI1 panel changes its desired cursor; dc_none = nobody wants one.
 void GAME_EXPORT Platform_SetCursorType( VGUI_DefaultCursor type )
 {
 	ps3_wants_cursor = ( type != dc_none );
-	// TFC-5 diagnostic: engine dedupes (only calls this on real transitions),
-	// so this is not spammy. Confirms whether VGUI1 ever actually requests a
-	// cursor at all on real hardware -- remove once the MOTD/team-select
-	// interaction bug is closed.
+	// TFC-5 diagnostic, not spammy (the engine only calls on transitions). Remove once
+	// the MOTD/team-select interaction bug is closed.
 	Con_Printf( "[ps3cursor] Platform_SetCursorType: type=%d wants_cursor=%d key_dest=%d\n",
 		(int)type, (int)ps3_wants_cursor, (int)cls.key_dest );
 }
@@ -262,9 +359,8 @@ static float PS3_StickAxis( unsigned int raw, int dz )
 	return 0.0f;
 }
 
-// Integrate both sticks into the virtual cursor position -- native menu or
-// any VGUI1 panel that currently wants a cursor (see ps3_wants_cursor).
-// Left and right stick both move it, so their input adds up if pushed together.
+// Integrate both sticks into the virtual cursor (menu or a VGUI1 panel that wants one);
+// their input adds up if both are pushed together.
 static void PS3_UpdateMenuCursor( const padData *data )
 {
 	const int dz = 28;
@@ -355,11 +451,9 @@ void PS3_MenuDrawCursor( void )
 	}
 }
 
-// ===========================================================================
 // USB keyboard + USB mouse (raw PSL1GHT HID, ported from ioQuake3-PS3)
-// ===========================================================================
 
-// Raw USB HID usage code (0x04-0x65) -> engine keynum (0 = unmapped).
+// Raw USB HID usage code -> engine keynum (0 = unmapped).
 // Letters are always lowercase; shifted chars arrive via CL_CharEvent.
 static const int s_raw_to_key[256] =
 {
@@ -394,12 +488,7 @@ static const int s_raw_to_key[256] =
 	[0x5F]=K_KP_HOME,      [0x60]=K_KP_UPARROW,   [0x61]=K_KP_PGUP,
 	[0x62]=K_KP_INS,       [0x63]=K_KP_DEL,
 
-	// Modifier keys. In RAW code type they arrive in the keycode array as
-	// usages 0xE0-0xE7, so they go through the same edge-diff path as every
-	// other key -- do NOT derive them from data.mkey, which comes back as
-	// garbage in this driver mode and fired CTRL (=+attack) on every press.
-	[0xE0]=K_CTRL, [0xE1]=K_SHIFT, [0xE2]=K_ALT,
-	[0xE4]=K_CTRL, [0xE5]=K_SHIFT, [0xE6]=K_ALT,
+	// No Ctrl/Shift/Alt: HW reports them only in mkey, and a lone modifier sends no press packet
 };
 
 // US-101 shifted forms for the printable keynums the table above emits.
@@ -421,33 +510,13 @@ static int KB_ShiftChar( int c )
 	}
 }
 
-// State slots: 0..255 are raw HID usage codes, 256..383 are printable ASCII
-// character keys (slot 256+ch). The keyboard driver stays in its INPUTCHAR
-// default (calling ioKbSetReadMode corrupts the shared io subsystem and also
-// breaks the pad), and in that mode letters/digits/punctuation come back as
-// ASCII while special keys come back as raw usages -- so both are handled.
-#define KB_SLOT_CHAR   256
-#define KB_NUM_SLOTS   384
+#define KB_NUM_SLOTS   256 // one per raw HID usage
 
 static KbInfo   s_kb_info;
 static qboolean s_kb_connected;
 static int      s_kb_port = -1;
 static byte     s_kb_cur[KB_NUM_SLOTS];
 static byte     s_kb_prev[KB_NUM_SLOTS];
-static double   s_kb_last_seen[KB_NUM_SLOTS];
-
-// Resolve a state slot to an engine keynum. 0 = no key event for this slot.
-static int KB_SlotToKey( int slot )
-{
-	if( slot >= KB_SLOT_CHAR )
-	{
-		int ch = slot - KB_SLOT_CHAR;
-		if( ch >= 'A' && ch <= 'Z' ) ch += 'a' - 'A'; // engine wants lowercase
-		if( ch == 8 ) return K_BACKSPACE;             // ASCII BS -> engine 127
-		return ch;                                    // 9/13/27 already match K_TAB/K_ENTER/K_ESCAPE
-	}
-	return s_raw_to_key[slot];
-}
 
 static void KB_ReleaseAll( void )
 {
@@ -455,8 +524,8 @@ static void KB_ReleaseAll( void )
 
 	for( k = 1; k < KB_NUM_SLOTS; k++ )
 	{
-		if( s_kb_prev[k] && KB_SlotToKey( k ))
-			Key_Event( KB_SlotToKey( k ), false );
+		if( s_kb_prev[k] && s_raw_to_key[k] )
+			Key_Event( s_raw_to_key[k], false );
 	}
 	memset( s_kb_prev, 0, sizeof( s_kb_prev ));
 }
@@ -467,7 +536,6 @@ static void KB_Init( void )
 	Con_Printf( "[ps3kb] ioKbInit -> %d\n", rc );
 	memset( s_kb_cur, 0, sizeof( s_kb_cur ));
 	memset( s_kb_prev, 0, sizeof( s_kb_prev ));
-	memset( s_kb_last_seen, 0, sizeof( s_kb_last_seen ));
 	s_kb_connected = false;
 	s_kb_port = -1;
 }
@@ -477,14 +545,15 @@ static void KB_Shutdown( void )
 	ioKbEnd();
 }
 
-// syncOnly: keep edge state current without emitting events (OSK owns input).
+// syncOnly: the OSK owns input, so held keys are released and new ones ignored.
 static void KB_Frame( qboolean syncOnly )
 {
 	KbData data;
 	int i, k, found_port, rc;
-	double now;
+	qboolean shift = false;
 	qboolean dbg = ( kb_debug.value != 0.0f );
 	static double s_next_status_log;
+	static u32 s_last_mkey;
 
 	if( ioKbGetInfo( &s_kb_info ) != 0 )
 	{
@@ -531,11 +600,8 @@ static void KB_Frame( qboolean syncOnly )
 		if( s_kb_connected && !syncOnly )
 			KB_ReleaseAll();
 
-		// Same sequence as ioQuake3-PS3 (proven on hardware): CodeType(RAW)
-		// first, then ReadMode(PACKET). PACKET+RAW makes every key -- letters
-		// included -- arrive as a raw HID usage in data.keycode[]; without
-		// PACKET the driver falls back to per-character ASCII and the raw
-		// table below misses A-Z/0-9.
+		// ioQuake3-PS3's HW-proven order: CodeType(RAW), then ReadMode(PACKET), so every key arrives
+		// as a raw usage; without PACKET the driver falls back to ASCII and the raw table misses A-Z/0-9
 		rc_ct = ioKbSetCodeType( found_port, KB_CODETYPE_RAW );
 		rc_rm = ioKbSetReadMode( found_port, KB_RMODE_PACKET );
 		ioKbClearBuf( found_port );
@@ -544,12 +610,23 @@ static void KB_Frame( qboolean syncOnly )
 
 		memset( s_kb_cur, 0, sizeof( s_kb_cur ));
 		memset( s_kb_prev, 0, sizeof( s_kb_prev ));
-		memset( s_kb_last_seen, 0, sizeof( s_kb_last_seen ));
 		s_kb_port = found_port;
 		s_kb_connected = true;
 	}
 
+	// zeroed: the driver skips fields on empty reads, and stale stack bytes once faked CTRL (+attack)
+	memset( &data, 0, sizeof( data ));
 	rc = ioKbRead( s_kb_port, &data );
+
+	// The system owns the keyboard (OSK, XMB: info bit 0) and keeps its release packets,
+	// so drop held keys; the read above still drains what queued meanwhile
+	if( syncOnly || ( s_kb_info.info & 1 ))
+	{
+		KB_ReleaseAll();
+		memset( s_kb_cur, 0, sizeof( s_kb_cur ));
+		return;
+	}
+
 	if( rc != 0 )
 	{
 		if( dbg && host.realtime > s_next_status_log )
@@ -560,82 +637,50 @@ static void KB_Frame( qboolean syncOnly )
 		return;
 	}
 
-	if( dbg && data.nb_keycode != 0 )
-		Con_Printf( "[ps3kb] nb_keycode=%d kc0=0x%04x kc1=0x%04x\n",
-			(int)data.nb_keycode, (unsigned)data.keycode[0], (unsigned)data.keycode[1] );
+	if( dbg && ( data.nb_keycode != 0 || data.mkey._KbMkeyU.mkeys != s_last_mkey ))
+	{
+		Con_Printf( "[ps3kb] nb_keycode=%d kc0=0x%04x kc1=0x%04x mkey=0x%x\n",
+			(int)data.nb_keycode, (unsigned)data.keycode[0], (unsigned)data.keycode[1],
+			(unsigned)data.mkey._KbMkeyU.mkeys );
+		s_last_mkey = data.mkey._KbMkeyU.mkeys;
+	}
 
-	now = host.realtime;
-
+	// PACKET mode sends a full snapshot only when the state changes (a release is a packet with
+	// no keys), so nb_keycode == 0 means "no change" and held keys stay down
 	if( data.nb_keycode > 0 )
 	{
-		// New snapshot: rebuild s_kb_cur from the packet. Absent keys = released.
 		memset( s_kb_cur, 0, sizeof( s_kb_cur ));
 		for( i = 0; i < data.nb_keycode && i < MAX_KEYCODES; i++ )
 		{
-			u16 kc = data.keycode[i];
-			u16 v  = kc & ~((u16)( KB_RAWDAT | KB_KEYPAD ));
-			int slot = -1;
+			// RAW mode sends plain usages; many equal an ASCII code (E = 0x08 = BS), so never decode as ASCII
+			u16 raw = data.keycode[i] & ~((u16)( KB_RAWDAT | KB_KEYPAD ));
 
-			if( kc & KB_RAWDAT )
-				slot = v; // special key -> raw HID usage
-			else if( v == 0x08 || v == 0x09 || v == 0x0D || v == 0x1B )
-				slot = KB_SLOT_CHAR + v; // ASCII BS/TAB/ENTER/ESC (ambiguous with letter usages)
-			else if(( v >= '0' && v <= '9' ) || ( v >= 'A' && v <= 'Z' ) || ( v >= 'a' && v <= 'z' ))
-				slot = KB_SLOT_CHAR + v; // alphanumeric ASCII character key
-			else if( v >= 0x04 && v <= 0x65 && s_raw_to_key[v] )
-				slot = v; // known raw HID usage delivered without RAWDAT (e.g. SPACE)
-			else if( v >= 0x20 && v <= 0x7E )
-				slot = KB_SLOT_CHAR + v; // other printable ASCII (punctuation)
+			if( raw > 0 && raw < KB_NUM_SLOTS )
+				s_kb_cur[raw] = 1;
+		}
 
-			if( slot > 0 && slot < KB_NUM_SLOTS )
-			{
-				s_kb_cur[slot] = 1;
-				s_kb_last_seen[slot] = now;
-			}
-		}
-	}
-	else
-	{
-		// nb_keycode == 0 means both "no keys" and "read failed" -- the SDK
-		// won't say which, so a 2s idle timeout is the only reliable release.
-		for( i = 1; i < KB_NUM_SLOTS; i++ )
-		{
-			if( s_kb_cur[i] && ( now - s_kb_last_seen[i] ) > 2.0 )
-				s_kb_cur[i] = 0;
-		}
+		// mkey is valid only in a packet (empty reads return 0), and presses only change here
+		shift = data.mkey._KbMkeyU._KbMkeyS.l_shift || data.mkey._KbMkeyU._KbMkeyS.r_shift;
 	}
 
-	if( !syncOnly )
+	for( k = 1; k < KB_NUM_SLOTS; k++ )
 	{
-		qboolean shift = s_kb_cur[0xE1] || s_kb_cur[0xE5];
+		int key;
+		if( s_kb_cur[k] == s_kb_prev[k] )
+			continue;
+		key = s_raw_to_key[k];
+		if( !key )
+			continue;
 
-		for( k = 1; k < KB_NUM_SLOTS; k++ )
-		{
-			int key;
-			if( s_kb_cur[k] == s_kb_prev[k] )
-				continue;
-			key = KB_SlotToKey( k );
-			if( !key )
-				continue;
+		if( dbg )
+			Con_Printf( "[ps3kb] usage 0x%x -> Key_Event(%d '%c', %d)\n",
+				k, key, ( key >= 32 && key < 127 ) ? key : '.', s_kb_cur[k] );
 
-			if( dbg )
-				Con_Printf( "[ps3kb] slot 0x%x -> Key_Event(%d '%c', %d)\n",
-					k, key, ( key >= 32 && key < 127 ) ? key : '.', s_kb_cur[k] );
+		Key_Event( key, s_kb_cur[k] );
 
-			Key_Event( key, s_kb_cur[k] );
-
-			// Char events: ASCII slots carry the character already; raw
-			// printable keynums are their own lowercase ASCII.
-			if( s_kb_cur[k] && key >= 32 && key < 127 )
-			{
-				int ch = key;
-				if( k >= KB_SLOT_CHAR )
-					ch = ( k - KB_SLOT_CHAR ); // pre-shifted by the driver
-				else if( shift )
-					ch = KB_ShiftChar( ch );
-				CL_CharEvent( ch );
-			}
-		}
+		// printable keynums are their own lowercase ASCII
+		if( s_kb_cur[k] && key >= 32 && key < 127 )
+			CL_CharEvent( shift ? KB_ShiftChar( key ) : key );
 	}
 
 	memcpy( s_kb_prev, s_kb_cur, sizeof( s_kb_cur ));
@@ -744,9 +789,8 @@ static void Mouse_Frame( qboolean syncOnly )
 	}
 }
 
-// Ports can (dis)connect anytime, so all MAX_PORT_NUM ports are rescanned every frame.
-// ioPadGetData's data isn't zero-filled on "no new input" despite its doc comment (per
-// ioQuake3-PS3 on real hardware) -- never branch on padData.len, just reuse the buffer.
+// All ports are rescanned every frame (they can (dis)connect anytime). ioPadGetData's data isn't
+// zero-filled on "no new input" (ioQuake3-PS3, real HW), so never branch on padData.len.
 void Platform_RunEvents( void )
 {
 	static padData data;
@@ -755,24 +799,27 @@ void Platform_RunEvents( void )
 	qboolean osk;
 	int i;
 
-	// Must run every frame regardless of pad state -- this is the only place
-	// XMB "close application" (SYSUTIL_EXIT_GAME) ever gets drained. Calls
-	// Sys_Quit() itself once XMB requests it (see sys_ps3.c).
+	// Every frame regardless of pad state: the only place XMB "close application"
+	// (SYSUTIL_EXIT_GAME) is drained; calls Sys_Quit() itself (see sys_ps3.c).
 	PS3_CheckExitRequested();
 
 	if( !ps3_pad_initialized )
 		return;
 
-	// Seed WASD + action binds once, after config.cfg has run, filling only
-	// keys the player's config left empty (survives its leading unbindall).
+	if( ps3_rumble_until != 0.0 && Platform_DoubleTime() >= ps3_rumble_until )
+		PS3_RumbleStop();
+
+	// Once after config.cfg has run (so it survives its leading unbindall): seed binds into
+	// keys it left empty, and move old saved settings to new PS3 defaults.
 	if( !s_kb_binds_seeded && host.config_executed )
 	{
 		PS3_SeedKeyboardBinds();
+		PS3_MigrateHudScale();
 		s_kb_binds_seeded = true;
 	}
 
-	// Poll USB keyboard/mouse every frame. While the OSK owns input, keep
-	// their edge state in sync but emit nothing.
+	// Poll USB keyboard/mouse every frame. While the OSK owns input, the keyboard
+	// releases held keys and the mouse keeps its edge state; neither emits a press.
 	osk = PS3_OSK_IsActive();
 	KB_Frame( osk );
 	Mouse_Frame( osk );
@@ -827,29 +874,21 @@ void Platform_RunEvents( void )
 		if( btn_cur[i] == ps3_btn_prev[i] )
 			continue;
 
-		// While the menu cursor is up, CROSS acts as a left click on the
-		// hovered item instead of "activate focused item". Latched on press
-		// so the matching release always uses the same key.
+		// With the cursor up, CROSS clicks the hovered item instead of activating the focused
+		// one. Latched on press so the matching release always uses the same key.
 		if( i == 0 )
 		{
 			if( btn_cur[0] )
 			{
 				ps3_cross_is_mouse = PS3_CursorVisible();
-				// TFC-5 diagnostic: only on press, confirms whether CROSS
-				// is landing as a click (K_MOUSE1) or a gameplay button
-				// (K_A_BUTTON), and the cursor state that decided it.
+				// TFC-5 diagnostic: logs whether CROSS lands as a click (K_MOUSE1) or K_A_BUTTON.
 				// Remove once the MOTD/team-select interaction bug is closed.
 				Con_Printf( "[ps3cursor] CROSS press: cross_is_mouse=%d wants_cursor=%d key_dest=%d cursor=(%.0f,%.0f)\n",
 					(int)ps3_cross_is_mouse, (int)ps3_wants_cursor, (int)cls.key_dest, ps3_cursor_x, ps3_cursor_y );
 			}
 
-			// Key_Event(K_MOUSE1, ...) only ever reaches VGui_KeyEvent() --
-			// VGUI1's own Panel/CommandButton click activation is driven by
-			// App::internalMousePressed, which only fires from the engine's
-			// separate IN_MouseEvent() -> VGui_MouseEvent() path (see
-			// engine/client/input/input.c). Routing a simulated click
-			// through Key_Event was the real reason CROSS moved the cursor
-			// onto "OK" but never activated it.
+			// VGUI1 clicks fire only from IN_MouseEvent() -> VGui_MouseEvent(); Key_Event(K_MOUSE1)
+			// reaches just VGui_KeyEvent(), which is why CROSS once hovered "OK" without clicking it
 			if( ps3_cross_is_mouse )
 				IN_MouseEvent( 0, btn_cur[0] );
 			else
@@ -878,11 +917,8 @@ void Platform_RunEvents( void )
 		}
 	}
 
-	// Whenever the cursor owns the stick -- the native menu, or a VGUI1 panel
-	// open over live gameplay -- every move and look axis must read 0. Same
-	// condition as PS3_UpdateMenuCursor, so the two can never both consume it.
-	// Gating only on key_dest left VGUI1 panels turning the view while you
-	// aimed at a menu entry, which read as the view snapping on every click.
+	// While the cursor owns the stick (menu or VGUI1 panel; same test as PS3_UpdateMenuCursor), move
+	// and look read 0. Gating on key_dest alone let VGUI1 panels turn the view while aiming at an entry.
 	if( joy_cursor.value != 0.0f && ( cls.key_dest == key_menu || ps3_wants_cursor ))
 	{
 		Joy_AxisMotionEvent( JOY_AXIS_SIDE,  0 );

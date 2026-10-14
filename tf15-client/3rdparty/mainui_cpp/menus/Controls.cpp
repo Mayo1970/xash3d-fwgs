@@ -114,11 +114,6 @@ private:
 	CMenuYesNoMessageBox msgBox2; // large msgbox
 };
 
-/*
-=================
-UI_Controls_GetKeyBindings
-=================
-*/
 void CMenuControls::GetKeyBindings( const char *command, int *twoKeys )
 {
 	twoKeys[0] = twoKeys[1] = -1;
@@ -291,6 +286,9 @@ void CMenuControls::ResetKeysList( void )
 		EngFuncs::ClientCmd( TRUE, cmd );
 	}
 
+	// xashPS3: unbindall cleared the pad and kb_def.lst has no pad buttons
+	EngFuncs::ClientCmd( TRUE, "resetpadkeys" );
+
 	EngFuncs::COM_FreeFile( afile );
 	keysListModel.Update();
 }
@@ -369,11 +367,6 @@ void CMenuControls::EnterGrabMode()
 	PlayLocalSound( uiStatic.sounds[SND_KEY] );
 }
 
-/*
-=================
-UI_Controls_Init
-=================
-*/
 void CMenuControls::_Init( void )
 {
 	banner.SetPicture( ART_BANNER );

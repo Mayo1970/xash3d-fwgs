@@ -39,80 +39,39 @@ private:
 	void _Init() override;
 	void _VidInit() override;
 	void GetConfig();
-	void VibrateChanged();
 	void SaveAndPopMenu() override;
 
 	CMenuSlider	soundVolume;
 	CMenuSlider	musicVolume;
 	CMenuSlider	suitVolume;
-	CMenuSlider	vibration;
 	CMenuCheckBox noDSP;
 	CMenuCheckBox useAlphaDSP;
 	CMenuCheckBox muteFocusLost;
-	CMenuCheckBox vibrationEnable;
-
-	float oldVibrate;
 };
 
-/*
-=================
-CMenuAudio::GetConfig
-=================
-*/
 void CMenuAudio::GetConfig( void )
 {
 	soundVolume.LinkCvar( "volume" );
 	musicVolume.LinkCvar( "MP3Volume" );
 	suitVolume.LinkCvar( "suitvolume" );
-	vibration.LinkCvar( "vibration_length" );
 
 	noDSP.LinkCvar( "room_off" );
 	useAlphaDSP.LinkCvar( "dsp_coeff_table" );
 	muteFocusLost.LinkCvar( "snd_mute_losefocus" );
-	vibrationEnable.LinkCvar( "vibration_enable" );
-
-	if( !vibrationEnable.bChecked )
-		vibration.SetGrayed( true );
-	oldVibrate = vibration.GetCurrentValue();
 }
 
-void CMenuAudio::VibrateChanged()
-{
-	float newVibrate = vibration.GetCurrentValue();
-	if( oldVibrate != newVibrate )
-	{
-		char cmd[64];
-		snprintf( cmd, 64, "vibrate %f", newVibrate );
-		EngFuncs::ClientCmd( false, cmd );
-		vibration.WriteCvar();
-		oldVibrate = newVibrate;
-	}
-}
-
-/*
-=================
-CMenuAudio::SetConfig
-=================
-*/
 void CMenuAudio::SaveAndPopMenu()
 {
 	soundVolume.WriteCvar();
 	musicVolume.WriteCvar();
 	suitVolume.WriteCvar();
-	vibration.WriteCvar();
 	noDSP.WriteCvar();
 	useAlphaDSP.WriteCvar();
 	muteFocusLost.WriteCvar();
-	vibrationEnable.WriteCvar();
 
 	CMenuFramework::SaveAndPopMenu();
 }
 
-/*
-=================
-CMenuAudio::Init
-=================
-*/
 void CMenuAudio::_Init( void )
 {
 	banner.SetPicture(ART_BANNER);
@@ -147,18 +106,6 @@ void CMenuAudio::_Init( void )
 	muteFocusLost.onChanged = CMenuEditable::WriteCvarCb;
 	muteFocusLost.SetCoord( 320, 560 );
 
-	vibrationEnable.szName = L( "Enable vibration" );
-	vibrationEnable.iMask = (QMF_GRAYED|QMF_INACTIVE);
-	vibrationEnable.bInvertMask = true;
-	vibrationEnable.onChanged = CMenuCheckBox::BitMaskCb;
-	vibrationEnable.onChanged.pExtra = &vibration.iFlags;
-	vibrationEnable.SetCoord( 700, 460 );
-
-	vibration.szName = L( "Vibration" );
-	vibration.Setup( 0.0f, 5.0f, 0.05f );
-	vibration.onChanged = VoidCb( &CMenuAudio::VibrateChanged );
-	vibration.SetCoord( 700, 560 );
-
 	AddItem( banner );
 	AddButton( L( "Done" ), nullptr, PC_DONE, VoidCb( &CMenuAudio::SaveAndPopMenu ));
 	AddItem( soundVolume );
@@ -167,8 +114,6 @@ void CMenuAudio::_Init( void )
 	AddItem( noDSP );
 	AddItem( useAlphaDSP );
 	AddItem( muteFocusLost );
-	AddItem( vibrationEnable );
-	AddItem( vibration );
 }
 
 void CMenuAudio::_VidInit( )

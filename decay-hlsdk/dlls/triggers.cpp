@@ -3357,7 +3357,7 @@ byte ArrayToByte(TBitArray A)
 {
 	int i;
 	byte fl = 1;
-	byte Result;
+	byte Result = 0;
 	for (i = 0; i < 8; i++, fl = fl << 1) {
 		if (A.Bits[i]) {
 				Result = Result | fl;

@@ -88,7 +88,7 @@ typedef struct {
     uint8_t         swizzled;   /* Morton-ordered, tightly packed levels, no pitch. */
     uint8_t         alloc_levels; /* mip levels `data` was actually sized for, >=1 */
                                 /* both fixed at allocation: size depends on them, cvars can change later */
-    uint8_t         opaque;     /* RGB internal format: GL samples alpha as 1, so texels store A=255 */
+    uint8_t         opaque;     /* RGB/luminance internal format: GL samples alpha as 1, so texels store A=255 */
     uint8_t         wrap_s, wrap_t;
     uint8_t         min_filter, mag_filter;
     gcmTexture      gcm_tex;

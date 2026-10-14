@@ -369,3 +369,7 @@ scripts/
 # AI-related stuff
 CLAUDE.md
 .claude/
+
+# Debug captures and logs
+buffer.dat
+scratchpad/

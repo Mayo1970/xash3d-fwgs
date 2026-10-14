@@ -1,0 +1,71 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+# Ricochet server. Valve's ricochet/dlls merged onto hlsdk-portable's 64-bit
+# safe tree as a separate source tree, so no RICOCHET gates exist anywhere.
+
+def options(opt):
+	return
+
+def configure(conf):
+	return
+
+def build(bld):
+	sdk = bld.path.parent.parent.find_dir('hlsdk-portable')
+
+	# every .cpp here is in Valve's own Makefile.ricochetdll list
+	source = bld.path.ant_glob(['*.cpp', 'wpn_shared/*.cpp'])
+	source += bld.path.parent.ant_glob([
+		'pm_shared/*.c',
+		'game_shared/voice_gamemgr.cpp',
+	])
+	source += sdk.ant_glob('public/safe_snprintf.c')
+
+	if not bld.env.HAVE_STRLCPY:
+		source += sdk.ant_glob('external/openbsd/strlcpy.c')
+
+	if not bld.env.HAVE_STRLCAT:
+		source += sdk.ant_glob('external/openbsd/strlcat.c')
+
+	# Valve's Linux renames; the multiplay rules use CVoiceGameMgr unconditionally,
+	# so NO_VOICEGAMEMGR is deliberately not defined
+	defines = [
+		'CLIENT_WEAPONS',
+		'SPEAKABLE_TARGETS',
+		'_LINUX',
+		'stricmp=strcasecmp',
+		'strnicmp=strncasecmp',
+		'_snprintf=snprintf',
+		'_vsnprintf=vsnprintf',
+	]
+
+	includes = [
+		'.',
+		'../../hlsdk-portable/common',
+		'../../hlsdk-portable/engine',
+		'../pm_shared',
+		'../game_shared',
+		'../../hlsdk-portable/public',
+		'../../hlsdk-portable/game_shared', # vcs_info.h only; ours above wins
+	]
+
+	# player.cpp and disc code pun floats through int lvalues like stock GoldSrc
+	flags = ['-fno-strict-aliasing']
+
+	# one merged relocatable object means one 64KB PPC64 .toc, same as gearbox
+	if bld.env.DEST_OS == 'ps3':
+		flags += ['-mminimal-toc']
+
+	bld.shlib(
+		source   = source,
+		target   = 'server',
+		name     = 'server',
+		features = 'c cxx',
+		includes = includes,
+		defines  = defines,
+		cflags   = flags,
+		cxxflags = flags,
+		use      = ['vcs_info', 'werror', 'yy_thunks'],
+		install_path = None,
+		idx = bld.get_taskgen_count()
+	)

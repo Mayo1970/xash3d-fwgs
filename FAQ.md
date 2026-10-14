@@ -12,6 +12,10 @@ If you want to run [Counter Strike](https://store.steampowered.com/app/10/Counte
 
 If you want to run [Team Fortress Classic](https://store.steampowered.com/app/20/Team_Fortress_Classic/), you will need to add **tfc**
 
+If you want to run [Ricochet](https://store.steampowered.com/app/60/Ricochet/), you will need to add **ricochet**
+
+If you want to run Half-Life: Decay, you will need to add **decay** (PC port with [Patch v1.026](https://www.moddb.com/mods/half-life-decay-v102/))
+
 **Q: I added the folders, but it doesn't work**
 
 **A:** Please make sure that you're using the **Steam releases**. I can't guarantee that it will work with pak files or other copies. All the tests were done using Steam's 25th and legacy releases. **You have been warned**.
@@ -22,7 +26,7 @@ If you want to run [Team Fortress Classic](https://store.steampowered.com/app/20
 
 **Q: Are mouse and keyboard supported?**
 
-**A:** Mouse is supported, keyboard has partial support. It may get added in future.
+**A:** Yes, both are supported. Ctrl, Shift and Alt can't be bound as single keys.
 
 **Q: Why can't I connect to some Counter Strike servers?**
 
@@ -35,6 +39,10 @@ If you want to run [Team Fortress Classic](https://store.steampowered.com/app/20
 **Q: How do I open the menu on Counter Strike and Team Fortress Classic?**
 
 **A:** Use D-pad up. Close with the same key. You can bind it from the settings.
+
+**Q: How do I swap characters in Half-Life Decay?**
+
+**A:** D-pad up.
 
 **Q: How do I add bots on Counter Strike?**
 
@@ -50,7 +58,7 @@ If you want to run [Team Fortress Classic](https://store.steampowered.com/app/20
 
 **Q: How can I connect to other servers even if they aren't listed?**
 
-**A:** You type **connect <ip>** in the console.
+**A:** You type **connect <ip>** in the console. You need to know the console IP you want to connect to, though.
 
 **Q: Can you port x?**
 

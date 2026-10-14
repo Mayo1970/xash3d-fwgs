@@ -1,17 +1,5 @@
-/*
-s_load.c - sounds managment
-Copyright (C) 2007 Uncle Mike
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-*/
+// s_load.c - sounds managment. Copyright (C) 2007 Uncle Mike
+// GPLv3 or later, WITHOUT ANY WARRANTY; see the GNU General Public License.
 
 #include "common.h"
 #include "client.h"
@@ -21,10 +9,8 @@ GNU General Public License for more details.
 #include "ps3_sound_preload.h"
 #endif
 
-// during registration it is possible to have more sounds
-// than could actually be referenced during gameplay,
-// because we don't want to free anything until we are
-// sure we won't need it.
+// registration can hold more sounds than gameplay references:
+// nothing is freed until we are sure we won't need it.
 #define MAX_SFX      8192
 #define MAX_SFX_HASH (MAX_SFX/4)
 
@@ -114,11 +100,6 @@ static void S_RegisterModClientSounds( void )
 }
 #endif
 
-/*
-=================
-S_SoundList_f
-=================
-*/
 void S_SoundList_f( void )
 {
 	sfx_t	*sfx;
@@ -153,11 +134,6 @@ void S_SoundList_f( void )
 	Con_Printf( "\n" );
 }
 
-/*
-=================
-S_CreateDefaultSound
-=================
-*/
 static wavdata_t *S_CreateDefaultSound( void )
 {
 	uint samples = SOUND_DMA_SPEED;
@@ -176,11 +152,6 @@ static wavdata_t *S_CreateDefaultSound( void )
 	return sc;
 }
 
-/*
-=================
-S_LoadSound
-=================
-*/
 wavdata_t *S_LoadSound( sfx_t *sfx )
 {
 	wavdata_t	*sc = NULL;
@@ -212,11 +183,8 @@ wavdata_t *S_LoadSound( sfx_t *sfx )
 			sc = FS_LoadSound( sfx->name, NULL, 0 );
 
 #if XASH_PS3
-		// Confirms the stall is really inside FS_LoadSound's disk I/O, not
-		// something else that happens to correlate with the same scripted
-		// trigger (e.g. the door/event entity's own server-side logic) --
-		// see the late-precache warning above for the "what", this is the
-		// "how long", printed together so a hardware log line answers both.
+		// Times FS_LoadSound alone, so the log shows the stall is disk I/O and
+		// not the server-side logic of the trigger that started the sound.
 		if( warn_late )
 			Con_Printf( S_WARN "%s: late precache of %s took %.2fms\n",
 				__func__, sfx->name, ( Platform_DoubleTime() - load_start ) * 1000.0 );
@@ -226,12 +194,8 @@ wavdata_t *S_LoadSound( sfx_t *sfx )
 	if( !sc ) sc = S_CreateDefaultSound();
 
 #if XASH_PS3
-	// The resample below sits AFTER the timing print above, so none of it has
-	// ever appeared in a "late precache took Nms" line -- a sound whose rate
-	// is not 11k/22k/44k pays a full-buffer resample that the existing
-	// instrumentation reports as zero. Time it separately rather than folding
-	// it into the load figure, because the fixes differ: a slow load wants
-	// preloading, a slow resample wants the asset re-cooked to a native rate.
+	// The resample runs after the load timing above, so time it separately:
+	// a slow load wants preloading, a slow resample wants a re-cooked asset.
 	{
 		double resample_start = Platform_DoubleTime();
 		word   rate_before = sc->rate;
@@ -258,12 +222,6 @@ wavdata_t *S_LoadSound( sfx_t *sfx )
 	return sfx->cache;
 }
 
-/*
-==================
-S_FindName
-
-==================
-*/
 sfx_t *S_FindName( const char *pname, qboolean *pfInCache )
 {
 	sfx_t	*sfx;
@@ -321,11 +279,6 @@ sfx_t *S_FindName( const char *pname, qboolean *pfInCache )
 	return sfx;
 }
 
-/*
-==================
-S_FreeSound
-==================
-*/
 void S_FreeSound( sfx_t *sfx )
 {
 	if( !sfx || !sfx->name[0] )
@@ -358,18 +311,13 @@ void S_FreeSound( sfx_t *sfx )
 	memset( sfx, 0, sizeof( *sfx ));
 }
 
-/*
-=====================
-S_BeginRegistration
-
-=====================
-*/
 void S_BeginRegistration( void )
 {
 	snd.have_ambient_sfx = false;
 
 #if XASH_PS3
-	if( GI->gamemode != GAME_MULTIPLAYER_ONLY )
+	// Decay v1.026 ships as multiplayer_only, but its co-op campaign speaks HL1 VOX lines
+	if( GI->gamemode != GAME_MULTIPLAYER_ONLY || !Q_stricmp( GI->gamefolder, "decay" ))
 	{
 		PS3_ProbeMemory( "before VOX preload" );
 		VOX_PreloadDeferred( NULL );
@@ -377,9 +325,8 @@ void S_BeginRegistration( void )
 	}
 	else
 	{
-		// Full sentences.txt costs 13.79Mb of unused HL1 words here, but a
-		// mod's own sentence group (CS radio + round/bomb/hostage: "MRAD_")
-		// is worth the matching-prefix preload below.
+		// Full sentences.txt costs 13.79Mb of unused HL1 words here; preload
+		// only the mod's own sentence group (CS: "MRAD_" radio and round lines).
 		const char *prefix = NULL;
 
 		for( int i = 0; i < (int)ARRAYSIZE( ps3_vox_sentence_prefix ); i++ )
@@ -420,12 +367,6 @@ void S_BeginRegistration( void )
 #endif
 }
 
-/*
-=====================
-S_EndRegistration
-
-=====================
-*/
 void S_EndRegistration( void )
 {
 	sfx_t	*sfx;
@@ -454,12 +395,6 @@ void S_EndRegistration( void )
 	s_registering = false;
 }
 
-/*
-==================
-S_RegisterSound
-
-==================
-*/
 sound_t S_RegisterSound( const char *name )
 {
 	sfx_t	*sfx;
@@ -501,11 +436,6 @@ sfx_t *S_GetSfxByHandle( sound_t handle )
 	return &s_knownSfx[handle];
 }
 
-/*
-=================
-S_InitSounds
-=================
-*/
 void S_InitSounds( void )
 {
 	// create unused 0-entry
@@ -517,11 +447,6 @@ void S_InitSounds( void )
 	s_numSfx = 1;
 }
 
-/*
-=================
-S_FreeSounds
-=================
-*/
 void S_FreeSounds( void )
 {
 	sfx_t	*sfx;

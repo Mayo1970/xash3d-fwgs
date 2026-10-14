@@ -1,23 +1,5 @@
-/*
-Copyright (C) 1997-2001 Id Software, Inc.
-
-This program is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License
-as published by the Free Software Foundation; either version 2
-of the License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-
-See the GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
-
-*/
-
+// Copyright (C) 1997-2001 Id Software, Inc.
+// GPLv2 or later, WITHOUT ANY WARRANTY; see the GNU General Public License.
 
 #include "Framework.h"
 #include "Action.h"
@@ -118,11 +100,6 @@ void CMenuMain::HazardCourseDialogCb()
 	dialog.Show();
 }
 
-/*
-=================
-CMenuMain::Key
-=================
-*/
 bool CMenuMain::KeyDown( int key )
 {
 	if( UI::Key::IsEscape( key ) )
@@ -141,11 +118,6 @@ bool CMenuMain::KeyDown( int key )
 	return CMenuFramework::KeyDown( key );
 }
 
-/*
-=================
-UI_Main_HazardCourse
-=================
-*/
 void CMenuMain::HazardCourseCb()
 {
 	if( EngFuncs::GetCvarFloat( "host_serverstate" ) && EngFuncs::GetCvarFloat( "maxplayers" ) > 1 )
@@ -242,7 +214,10 @@ void CMenuMain::_Init( void )
 	minimizeBtn.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
 	minimizeBtn.onReleased.SetCommand( false, "minimize\n" );
 
-	if ( gMenu.m_gameinfo.gamemode == GAME_MULTIPLAYER_ONLY || gMenu.m_gameinfo.startmap[0] == 0 )
+	// Decay is multiplayer_only, but New Game hosts its 2-slot co-op server (see NewGame.cpp)
+	bool bNoNewGame = gMenu.m_gameinfo.gamemode == GAME_MULTIPLAYER_ONLY && stricmp( gMenu.m_gameinfo.gamefolder, "decay" );
+
+	if ( bNoNewGame || gMenu.m_gameinfo.startmap[0] == 0 )
 		newGame.SetGrayed( true );
 
 	if ( gMenu.m_gameinfo.gamemode == GAME_SINGLEPLAYER_ONLY )
@@ -302,11 +277,6 @@ void CMenuMain::_Init( void )
 	AddItem( quitButton );
 }
 
-/*
-=================
-UI_Main_Init
-=================
-*/
 void CMenuMain::VidInit( bool connected )
 {
 	int hoffset = ( 70 / 640.0 ) * 1024.0;

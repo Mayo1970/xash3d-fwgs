@@ -69,7 +69,12 @@ CVAR_DEFINE_AUTO( cl_clockreset, "0.1", 0, "frametime delta maximum value before
 static CVAR_DEFINE_AUTO( cl_fixtimerate, "7.5", 0, "time in msec to client clock adjusting" );
 CVAR_DEFINE_AUTO( hud_fontscale, "1.0", FCVAR_ARCHIVE|FCVAR_LATCH, "scale hud font texture" );
 CVAR_DEFINE_AUTO( hud_fontrender, "0", FCVAR_ARCHIVE, "hud font render mode (0: additive, 1: holes, 2: trans)" );
+#if XASH_PS3
+// 1.5x = the classic 480-line HUD at 720p, readable on a TV; in_ps3.c moves old "0" configs once
+CVAR_DEFINE_AUTO( hud_scale, "1.5", FCVAR_ARCHIVE|FCVAR_LATCH, "scale hud at current resolution" );
+#else
 CVAR_DEFINE_AUTO( hud_scale, "0", FCVAR_ARCHIVE|FCVAR_LATCH, "scale hud at current resolution" );
+#endif
 CVAR_DEFINE_AUTO( hud_scale_minimal_width, "640", FCVAR_ARCHIVE|FCVAR_LATCH, "if hud_scale results in a HUD virtual screen smaller than this value, it won't be applied" );
 CVAR_DEFINE_AUTO( cl_solid_players, "1", 0, "Make all players not solid (can't traceline them)" );
 CVAR_DEFINE_AUTO( cl_updaterate, "20", FCVAR_USERINFO|FCVAR_ARCHIVE, "refresh rate of server messages" );
@@ -92,9 +97,7 @@ CVAR_DEFINE_AUTO( ui_renderworld, "0", FCVAR_ARCHIVE, "render world when UI is v
 static CVAR_DEFINE_AUTO( cl_maxframetime, "0", 0, "set deadline timer for client rendering to catch freezes" );
 CVAR_DEFINE_AUTO( cl_fixmodelinterpolationartifacts, "1", 0, "try to fix up models interpolation on a moving platforms (monsters on trains for example)" );
 
-//
 // userinfo
-//
 static char username[32];
 static CVAR_DEFINE_AUTO( name, username, FCVAR_USERINFO|FCVAR_ARCHIVE|FCVAR_PRINTABLEONLY|FCVAR_FILTERABLE, "player name" );
 static CVAR_DEFINE_AUTO( model, "", FCVAR_USERINFO|FCVAR_ARCHIVE|FCVAR_FILTERABLE, "player model ('player' is a singleplayer model)" );
@@ -269,13 +272,7 @@ static void CL_CreateResourceList( void )
 	FS_Close( fp );
 }
 
-/*
-==================
-CL_UpdateLogo
-
-repackage the clan logo and upload it to the server
-==================
-*/
+// repackage the clan logo and upload it to the server
 static void CL_UpdateLogo( void )
 {
 	if( cls.state != ca_active )
@@ -317,14 +314,7 @@ static void CL_CheckLogoChanged( void )
 #endif
 }
 
-/*
-===============
-CL_CheckClientState
-
-finalize connection process and begin new frame
-with new cls.state
-===============
-*/
+// finalize connection process and begin new frame with new cls.state
 static void CL_CheckClientState( void )
 {
 	// first update is the pre-final signon stage
@@ -376,9 +366,8 @@ static int CL_GetGoldSrcFragmentSize( void *unused, fragsize_t mode )
 	default:
 		if( cls.state == ca_active )
 		{
-			// GoldSrc's default value is 512
-			// let's help users to not shoot themselves in the foot,
-			// assuming nobody wants to make this value lower
+			// GoldSrc's default is 512; don't let users shoot themselves in the foot
+			// with lower values
 			return bound( 512, cl_dlmax.value, 1024 );
 		}
 		return 128;
@@ -400,13 +389,7 @@ static int CL_GetFragmentSize( void *unused, fragsize_t mode )
 	}
 }
 
-/*
-=====================
-CL_SignonReply
-
-An svc_signonnum has been received, perform a client side setup
-=====================
-*/
+// An svc_signonnum has been received, perform a client side setup
 void CL_SignonReply( connprotocol_t proto )
 {
 	// g-cont. my favorite message :-)
@@ -428,14 +411,7 @@ void CL_SignonReply( connprotocol_t proto )
 	}
 }
 
-/*
-===============
-CL_LerpPoint
-
-Determines the fraction between the last two messages that the objects
-should be put at.
-===============
-*/
+// Determines the fraction between the last two messages that the objects should be put at.
 static float CL_LerpPoint( void )
 {
 	double f = cl_serverframetime();
@@ -460,13 +436,7 @@ static float CL_LerpPoint( void )
 	return frac;
 }
 
-/*
-===============
-CL_DriftInterpolationAmount
-
-Drift interpolation value (this is used for server unlag system)
-===============
-*/
+// Drift interpolation value (this is used for server unlag system)
 static int CL_DriftInterpolationAmount( int goal )
 {
 	float	fgoal = (float)goal / 1000.0f;
@@ -485,13 +455,7 @@ static int CL_DriftInterpolationAmount( int goal )
 	return msec;
 }
 
-/*
-===============
-CL_ComputeClientInterpolationAmount
-
-Validate interpolation cvars, calc interpolation window
-===============
-*/
+// Validate interpolation cvars, calc interpolation window
 static void CL_ComputeClientInterpolationAmount( usercmd_t *cmd )
 {
 	const float epsilon = 0.001f; // to avoid float invalid comparision
@@ -532,12 +496,6 @@ static void CL_ComputeClientInterpolationAmount( usercmd_t *cmd )
 	cmd->lerp_msec = CL_DriftInterpolationAmount( interpolation_time * 1000 );
 }
 
-/*
-=================
-CL_ComputePacketLoss
-
-=================
-*/
 static void CL_ComputePacketLoss( void )
 {
 	int lost = 0;
@@ -556,12 +514,6 @@ static void CL_ComputePacketLoss( void )
 	cls.packet_loss = lost * 100.0f / (float)CL_UPDATE_BACKUP;
 }
 
-/*
-=================
-CL_UpdateFrameLerp
-
-=================
-*/
 void CL_UpdateFrameLerp( void )
 {
 	if( cls.state != ca_active || !cl.validsequence )
@@ -634,20 +586,8 @@ static void CL_ApplyAddAngle( void )
 }
 
 
-/*
-=======================================================================
-
-CLIENT MOVEMENT COMMUNICATION
-
-=======================================================================
-*/
-/*
-===============
-CL_ProcessShowTexturesCmds
-
-navigate around texture atlas
-===============
-*/
+// CLIENT MOVEMENT COMMUNICATION
+// navigate around texture atlas
 static qboolean CL_ProcessShowTexturesCmds( usercmd_t *cmd )
 {
 	static int	oldbuttons;
@@ -667,13 +607,7 @@ static qboolean CL_ProcessShowTexturesCmds( usercmd_t *cmd )
 	return true;
 }
 
-/*
-===============
-CL_ProcessOverviewCmds
-
-Transform user movement into overview adjust
-===============
-*/
+// Transform user movement into overview adjust
 static qboolean CL_ProcessOverviewCmds( usercmd_t *cmd )
 {
 	ref_overview_t	*ov = &clgame.overView;
@@ -719,13 +653,7 @@ static qboolean CL_ProcessOverviewCmds( usercmd_t *cmd )
 	return true;
 }
 
-/*
-=================
-CL_UpdateClientData
-
-tell the client.dll about player origin, angles, fov, etc
-=================
-*/
+// tell the client.dll about player origin, angles, fov, etc
 static void CL_UpdateClientData( void )
 {
 	if( cls.state != ca_active )
@@ -747,11 +675,6 @@ static void CL_UpdateClientData( void )
 	}
 }
 
-/*
-=================
-CL_CreateCmd
-=================
-*/
 static void CL_CreateCmd( void )
 {
 	usercmd_t nullcmd = { 0 }, *cmd;
@@ -869,14 +792,7 @@ void CL_WriteUsercmd( connprotocol_t proto, sizebuf_t *msg, int from, int to )
 	else MSG_WriteDeltaUsercmd( msg, f, t );
 }
 
-/*
-===================
-CL_WritePacket
-
-Create and send the command packet to the server
-Including both the reliable commands and the usercmds
-===================
-*/
+// Create and send the command packet to the server, including both the reliable commands and the usercmds
 static void CL_WritePacket( void )
 {
 	enum { MAX_CMD_BUFFER = 8000 };
@@ -886,13 +802,8 @@ static void CL_WritePacket( void )
 	int numbackup, maxbackup, maxcmds;
 	const connprotocol_t proto = cls.net_protocol;
 
-	// FIXME: on Xash protocol we don't send move commands until ca_active
-	// to prevent outgoing_command outrun incoming_acknowledged
-	// which is fatal for some buggy mods like TFC
-	//
-	// ... but GoldSrc don't have (real) ca_validate state, so we consider
-	// ca_validate the same as ca_active, otherwise we don't pass validation
-	// of server-side mods like ReAuthCheck
+	// FIXME: Xash protocol waits for ca_active so outgoing_command can't outrun incoming_acknowledged
+	// (fatal for buggy mods like TFC); GoldSrc treats ca_validate as active, or ReAuthCheck fails
 	const connstate_t min_state = proto == PROTO_GOLDSRC ? ca_validate : ca_active;
 
 	// don't send anything if playing back a demo
@@ -1044,13 +955,7 @@ static void CL_WritePacket( void )
 	Netchan_UpdateProgress( &cls.netchan );
 }
 
-/*
-=================
-CL_SendCommand
-
-Called every frame to builds and sends a command packet to the server.
-=================
-*/
+// Called every frame to builds and sends a command packet to the server.
 static void CL_SendCommand( void )
 {
 	// we create commands even if a demo is playing,
@@ -1063,11 +968,6 @@ static void CL_SendCommand( void )
 	PS3_DIAG_FRAME( "cl: after CL_WritePacket" );
 }
 
-/*
-==================
-CL_BeginUpload_f
-==================
-*/
 static void CL_BeginUpload_f( void )
 {
 	resource_t	custResource;
@@ -1131,24 +1031,13 @@ static void CL_BeginUpload_f( void )
 	}
 }
 
-/*
-==================
-CL_Quit_f
-==================
-*/
 void CL_Quit_f( void )
 {
 	CL_Disconnect();
 	Sys_Quit( "command" );
 }
 
-/*
-================
-CL_Drop
-
-Called after an Host_Error was thrown
-================
-*/
+// Called after an Host_Error was thrown
 void CL_Drop( void )
 {
 	if( !cls.initialized )
@@ -1232,14 +1121,7 @@ void CL_SendGoldSrcConnectPacket( netadr_t adr, int challenge, const void *ticke
 	Con_Printf( "Trying to connect with GoldSrc 48 protocol\n" );
 }
 
-/*
-=======================
-CL_SendConnectPacket
-
-We have gotten a challenge from the server, so try and
-connect.
-======================
-*/
+// We have gotten a challenge from the server, so try and connect.
 static void CL_SendConnectPacket( connprotocol_t proto, int challenge )
 {
 	char protinfo[MAX_INFO_STRING];
@@ -1326,13 +1208,7 @@ static void CL_SendConnectPacket( connprotocol_t proto, int challenge )
 	cls.timestart = Platform_DoubleTime();
 }
 
-/*
-=================
-CL_GetTestFragmentSize
-
-Returns bandwidth test fragment size
-=================
-*/
+// Returns bandwidth test fragment size
 static int CL_GetTestFragmentSize( void )
 {
 	// const int fragmentSizes[CL_TEST_RETRIES] = { 64000, 32000, 10666, 5200, 1400 };
@@ -1366,19 +1242,12 @@ static void CL_SendBandwidthTest( netadr_t to, qboolean start )
 
 static void CL_SendGetChallenge( netadr_t to )
 {
-	// always send GoldSrc-styled getchallenge message
-	// Xash servers will ignore it but for GoldSrc it will help
-	// in auto-detection
+	// always send a GoldSrc-styled getchallenge: Xash servers ignore it,
+	// GoldSrc ones use it for auto-detection
 	Netchan_OutOfBandPrint( NS_CLIENT, to, C2S_GETCHALLENGE" steam\n" );
 }
 
-/*
-=================
-CL_CheckForResend
-
-Resend a connect message if the last one has timed out
-=================
-*/
+// Resend a connect message if the last one has timed out
 static void CL_CheckForResend( void )
 {
 	netadr_t adr;
@@ -1463,10 +1332,8 @@ static void CL_CheckForResend( void )
 
 	if( cls.bandwidth_test.started )
 	{
-		// a1ba: what should we do if the test has been failed?
-		// server might intentionally not implement the test,
-		// but tell us that test is allowed
-		// in this case, just send connect packet and hope for the best
+		// a1ba: on a failed test (a server may allow it but not implement it),
+		// just send the connect packet and hope for the best
 		if( cls.bandwidth_test.passed || cls.bandwidth_test.failed )
 			CL_SendConnectPacket( cls.net_protocol, cls.bandwidth_test.challenge );
 		else
@@ -1498,12 +1365,6 @@ static qboolean CL_StringToProtocol( const char *s, connprotocol_t *proto )
 	return false;
 }
 
-/*
-================
-CL_Connect_f
-
-================
-*/
 static void CL_Connect_f( void )
 {
 	string	server;
@@ -1541,14 +1402,7 @@ static void CL_Connect_f( void )
 	cls.signon = 0;
 }
 
-/*
-=====================
-CL_Rcon_f
-
-Send the rest of the command line over as
-an unconnected command.
-=====================
-*/
+// Send the rest of the command line over as an unconnected command.
 static void CL_Rcon_f( void )
 {
 	char message[1024];
@@ -1600,12 +1454,6 @@ static void CL_Rcon_f( void )
 }
 
 
-/*
-=====================
-CL_ClearState
-
-=====================
-*/
 void CL_ClearState( void )
 {
 	CL_ClearResourceLists();
@@ -1646,13 +1494,7 @@ void CL_ClearState( void )
 	HTTP_ClearCustomServers();
 }
 
-/*
-=====================
-CL_SendDisconnectMessage
-
-Sends a disconnect message to the server
-=====================
-*/
+// Sends a disconnect message to the server
 static void CL_SendDisconnectMessage( connprotocol_t proto )
 {
 	sizebuf_t	buf;
@@ -1725,13 +1567,7 @@ void CL_SetupNetchanForProtocol( connprotocol_t proto )
 		Netchan_SetCookie( &cls.netchan, cls.netchan_pending_cookie );
 }
 
-/*
-=====================
-CL_Reconnect
-
-build a request to reconnect client
-=====================
-*/
+// build a request to reconnect client
 static void CL_Reconnect( qboolean setup_netchan )
 {
 	if( setup_netchan )
@@ -1760,15 +1596,8 @@ static void CL_Reconnect( qboolean setup_netchan )
 	CL_StartupDemoHeader ();
 }
 
-/*
-=====================
-CL_Disconnect
-
-Goes from a connected state to full screen console state
-Sends a disconnect message to the server
-This is also called on Host_Error, so it shouldn't cause any errors
-=====================
-*/
+// Goes from a connected state to full screen console state and sends a disconnect message to the server.
+// Also called on Host_Error, so it shouldn't cause any errors
 void CL_Disconnect( void )
 {
 	if( cls.state == ca_disconnected )
@@ -1833,11 +1662,6 @@ void CL_Crashed( void )
 	Host_WriteConfig();	// write config
 }
 
-/*
-=================
-CL_LocalServers_f
-=================
-*/
 static void CL_LocalServers_f( void )
 {
 	Con_Printf( "Scanning for servers on the local network area...\n" );
@@ -1858,11 +1682,6 @@ static void CL_LocalServers_f( void )
 	}
 }
 
-/*
-=================
-CL_InternetServers_f
-=================
-*/
 static void CL_InternetServers_f( void )
 {
 	if( Cmd_Argc( ) > 2 || ( Cmd_Argc( ) == 2 && !Info_IsValid( Cmd_Argv( 1 ))))
@@ -1911,13 +1730,7 @@ static void CL_QueryServer_f( void )
 	NET_QueryServerByAddress( adr, proto );
 }
 
-/*
-=================
-CL_Reconnect_f
-
-The server is changing levels
-=================
-*/
+// The server is changing levels
 static void CL_Reconnect_f( void )
 {
 	if( cls.state == ca_disconnected )
@@ -1948,13 +1761,7 @@ static void CL_Reconnect_f( void )
 	}
 }
 
-/*
-=================
-CL_Retry_f
-
-retry connection to last server
-=================
-*/
+// retry connection to last server
 static void CL_Retry_f( void )
 {
 	if( COM_StringEmptyOrNULL( cls.servername ))
@@ -1987,13 +1794,7 @@ static void CL_Retry_f( void )
 	cls.signon = 0;
 }
 
-/*
-=================
-CL_FixupColorStringsForInfoString
-
-all the keys and values must be ends with ^7
-=================
-*/
+// all the keys and values must be ends with ^7
 static void CL_FixupColorStringsForInfoString( const char *in, char *out, size_t len )
 {
 	int	color = 7;
@@ -2049,13 +1850,7 @@ static void CL_FixupColorStringsForInfoString( const char *in, char *out, size_t
 	*out = '\0';
 }
 
-/*
-=================
-CL_ParseStatusMessage
-
-Handle a reply from a info
-=================
-*/
+// Handle a reply from a info
 static void CL_ParseStatusMessage( netadr_t from, sizebuf_t *msg )
 {
 	static char	infostring[512+8];
@@ -2105,9 +1900,8 @@ static void CL_ParseGoldSrcStatusMessage( netadr_t from, sizebuf_t *msg, qboolea
 	{
 		int mod;
 
-		// FIXME: this is invalid, `m` servers might be geniune 47 proto servers
-		// but many servers that reply with legacy format are 47/48
-		// so at least let the user to connect them
+		// FIXME: invalid, `m` servers might be genuine proto 47, but many legacy-format
+		// replies come from 47/48 servers, so at least let the user connect to them
 		p = PROTOCOL_GOLDSRC_VERSION;
 
 		MSG_ReadString( msg ); // address
@@ -2199,13 +1993,7 @@ static void CL_ParseGoldSrcStatusMessage( netadr_t from, sizebuf_t *msg, qboolea
 	UI_AddServerToList( from, s );
 }
 
-/*
-=================
-CL_ParseNETInfoMessage
-
-Handle a reply from a netinfo
-=================
-*/
+// Handle a reply from a netinfo
 static void CL_ParseNETInfoMessage( netadr_t from, const char *s )
 {
 	net_request_t	*nr = NULL;
@@ -2288,13 +2076,7 @@ static void CL_ParseNETInfoMessage( netadr_t from, const char *s )
 		memset( nr, 0, sizeof( *nr )); // done
 }
 
-/*
-=================
-CL_ProcessNetRequests
-
-check for timeouts
-=================
-*/
+// check for timeouts
 static void CL_ProcessNetRequests( void )
 {
 	net_request_t	*nr;
@@ -2319,13 +2101,7 @@ static void CL_ProcessNetRequests( void )
 }
 
 //===================================================================
-/*
-===============
-CL_SetupOverviewParams
-
-Get initial overview values
-===============
-*/
+// Get initial overview values
 void CL_SetupOverviewParams( void )
 {
 	ref_overview_t	*ov = &clgame.overView;
@@ -2357,13 +2133,7 @@ void CL_SetupOverviewParams( void )
 	}
 }
 
-/*
-=================
-CL_IsFromConnectingServer
-
-Used for connectionless packets, when netchan may not be ready.
-=================
-*/
+// Used for connectionless packets, when netchan may not be ready.
 qboolean CL_IsFromConnectingServer( netadr_t from )
 {
 	return NET_IsLocalAddress( from ) ||
@@ -2559,9 +2329,8 @@ static void CL_Challenge( const char *c, netadr_t from )
 
 		if( Cmd_Argc( ) == 5 && cls.steam_auth )
 		{
-			// arg 2 auth protocol, we only support steam
-			// arg 3 if steam is server's steam id
-			// arg 4 if steam is server's VAC status
+			// arg 2: auth protocol (only steam supported); with steam,
+			// arg 3 is the server's steam id and arg 4 its VAC status
 			cls.server_steamid = strtoull( Cmd_Argv( 3 ), NULL, 10 );
 			cls.vac2_secure = Q_atoi( Cmd_Argv( 4 ));
 		}
@@ -2639,12 +2408,6 @@ static void CL_Reject( const char *c, const char *args, netadr_t from )
 	CL_Disconnect_f();
 }
 
-/*
-=================
-CL_NotifyServerListResponse
-
-=================
-*/
 void CL_NotifyServerListResponse( void )
 {
 	if( !cls.internetservers_pending )
@@ -2705,13 +2468,7 @@ static void CL_ServerList( netadr_t from, sizebuf_t *msg )
 	CL_NotifyServerListResponse();
 }
 
-/*
-=================
-CL_ConnectionlessPacket
-
-Responses to broadcasts, etc
-=================
-*/
+// Responses to broadcasts, etc
 static void CL_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 {
 	char *args;
@@ -2803,13 +2560,7 @@ static void CL_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 	}
 }
 
-/*
-====================
-CL_GetMessage
-
-Handles recording and playback of demos, on top of NET_ code
-====================
-*/
+// Handles recording and playback of demos, on top of NET_ code
 static qboolean CL_GetMessage( byte *data, size_t *length )
 {
 	if( cls.demoplayback )
@@ -2841,11 +2592,6 @@ static void CL_ParseNetMessage( sizebuf_t *msg, void (*parsefn)( sizebuf_t * ))
 }
 
 
-/*
-=================
-CL_ReadNetMessage
-=================
-*/
 static void CL_ReadNetMessage( void )
 {
 	size_t	curSize;
@@ -2936,14 +2682,7 @@ static void CL_ReadNetMessage( void )
 	CL_ProcessNetRequests();
 }
 
-/*
-=================
-CL_ReadPackets
-
-Updates the local time and reads/handles messages
-on client net connection.
-=================
-*/
+// Updates the local time and reads/handles messages on client net connection.
 static void CL_ReadPackets( void )
 {
 	// decide the simulation time
@@ -2981,11 +2720,8 @@ static void CL_ReadPackets( void )
 	if( NET_IsLocalAddress( cls.netchan.remote_address ))
 		return;
 
-	// if in the debugger last frame, don't timeout.
-	// NOTE: host.frametime is clamped to MAX_FRAMETIME (0.25s) by Host_FilterTime,
-	// so it can never exceed 5s and this test used to be dead code. host.pureframetime
-	// is the unclamped duration of the previous frame body, which is what we want:
-	// a multi-second precache stall must not count against the connection.
+	// don't time out after a long frame (debugger, multi-second precache): host.frametime is
+	// clamped to 0.25s, so use the unclamped host.pureframetime
 	if( host.pureframetime > 5.0 )
 		cls.netchan.last_received = Platform_DoubleTime();
 
@@ -3002,13 +2738,7 @@ static void CL_ReadPackets( void )
 
 }
 
-/*
-====================
-CL_CleanFileName
-
-Replace the displayed name for some resources
-====================
-*/
+// Replace the displayed name for some resources
 static const char *CL_CleanFileName( const char *filename )
 {
 	if( !COM_StringEmptyOrNULL( filename ) && filename[0] == '!' )
@@ -3018,13 +2748,7 @@ static const char *CL_CleanFileName( const char *filename )
 }
 
 
-/*
-====================
-CL_RegisterCustomization
-
-register custom resource for player
-====================
-*/
+// register custom resource for player
 static void CL_RegisterCustomization( resource_t *resource )
 {
 	qboolean		bFound = false;
@@ -3052,14 +2776,8 @@ static void CL_RegisterCustomization( resource_t *resource )
 	}
 }
 
-/*
-====================
-CL_ProcessFile
-
-A file has been received via the fragmentation/reassembly layer, put it in the right spot and
- see if we have finished downloading files.
-====================
-*/
+// A file has been received via the fragmentation/reassembly layer, put it in the right spot and see if we
+// have finished downloading files.
 void CL_ProcessFile( qboolean successfully_received, const char *filename )
 {
 	int		sound_len = sizeof( DEFAULT_SOUNDPATH ) - 1;
@@ -3172,13 +2890,7 @@ void CL_ProcessFile( qboolean successfully_received, const char *filename )
 	}
 }
 
-/*
-====================
-CL_ServerCommand
-
-send command to a server
-====================
-*/
+// send command to a server
 void CL_ServerCommand( qboolean reliable, const char *fmt, ... )
 {
 	char		string[MAX_SYSPATH];
@@ -3203,13 +2915,7 @@ void CL_ServerCommand( qboolean reliable, const char *fmt, ... )
 	}
 }
 
-/*
-===============
-CL_UpdateInfo
-
-tell server about changed userinfo
-===============
-*/
+// tell server about changed userinfo
 void CL_UpdateInfo( const char *key, const char *value )
 {
 	switch( cls.net_protocol )
@@ -3228,11 +2934,6 @@ void CL_UpdateInfo( const char *key, const char *value )
 }
 
 //=============================================================================
-/*
-==============
-CL_SetInfo_f
-==============
-*/
 static void CL_SetInfo_f( void )
 {
 	convar_t	*var;
@@ -3251,9 +2952,8 @@ static void CL_SetInfo_f( void )
 		return;
 	}
 
-	// NOTE: some userinfo comed from cvars, e.g. cl_lw but we can call "setinfo cl_lw 1"
-	// without real cvar changing. So we need to lookup for cvar first to make sure what
-	// our key is not linked with console variable
+	// some userinfo comes from cvars (e.g. cl_lw), and "setinfo cl_lw 1" doesn't change
+	// the cvar, so look it up first to make sure our key is not linked to a cvar
 	var = Cvar_FindVar( Cmd_Argv( 1 ));
 
 	// make sure what cvar is existed and really part of userinfo
@@ -3268,11 +2968,6 @@ static void CL_SetInfo_f( void )
 	}
 }
 
-/*
-==============
-CL_Physinfo_f
-==============
-*/
 static void CL_Physinfo_f( void )
 {
 	Con_Printf( "Phys info settings:\n" );
@@ -3305,19 +3000,8 @@ static qboolean CL_ShouldRescanFilesystem( void )
 	return retval;
 }
 
-/*
-==============
-CL_LoadingKeepAlive
-
-Precaching and the consistency response both block the host loop for many
-seconds on PS3's slow storage. Nothing in that path touches the netchan, so a
-remote server sees a silent client for the whole load and can time it out.
-
-Send a bare netchan packet (Netchan_TransmitBits appends clc_nop when there is
-nothing to say) at most once per second so the remote end keeps seeing us.
-Off by default: flip cl_loading_keepalive to 1 to test it in isolation.
-==============
-*/
+// Long PS3 loads block the netchan and a remote server can time us out: send a bare packet
+// (clc_nop) at most once per second. Off by default, test with cl_loading_keepalive 1.
 void CL_LoadingKeepAlive( void )
 {
 	static qboolean	inside = false;
@@ -3510,13 +3194,7 @@ qboolean CL_PrecacheResources( void )
 	return true;
 }
 
-/*
-==================
-CL_FullServerinfo_f
-
-Sent by server when serverinfo changes
-==================
-*/
+// Sent by server when serverinfo changes
 static void CL_FullServerinfo_f( void )
 {
 	if( Cmd_Argc() != 2 )
@@ -3528,13 +3206,7 @@ static void CL_FullServerinfo_f( void )
 	Q_strncpy( cl.serverinfo, Cmd_Argv( 1 ), sizeof( cl.serverinfo ));
 }
 
-/*
-=================
-CL_Escape_f
-
-Escape to menu from game
-=================
-*/
+// Escape to menu from game
 static void CL_Escape_f( void )
 {
 	if( cls.key_dest == key_menu )
@@ -3564,11 +3236,6 @@ static void CL_ListMessages_f( void )
 	Con_Printf( "Total %i messages\n", i );
 }
 
-/*
-=================
-CL_InitLocal
-=================
-*/
 static void CL_InitLocal( void )
 {
 	cls.state = ca_disconnected;
@@ -3733,14 +3400,7 @@ static void CL_InitLocal( void )
 }
 
 //============================================================================
-/*
-==================
-CL_AdjustClock
-
-slowly adjuct client clock
-to smooth lag effect
-==================
-*/
+// slowly adjuct client clock to smooth lag effect
 static void CL_AdjustClock( void )
 {
 	if( cl.timedelta == 0.0f || !cl_fixtimerate.value )
@@ -3770,12 +3430,6 @@ static void CL_AdjustClock( void )
 	}
 }
 
-/*
-==================
-Host_ClientBegin
-
-==================
-*/
 void Host_ClientBegin( void )
 {
 	// exec console commands
@@ -3806,12 +3460,6 @@ void Host_ClientBegin( void )
 	PS3_DIAG_FRAME( "cl: Host_ClientBegin exit" );
 }
 
-/*
-==================
-Host_ClientFrame
-
-==================
-*/
 void Host_ClientFrame( void )
 {
 	// if client is not active, do nothing
@@ -3864,9 +3512,8 @@ void Host_ClientFrame( void )
 	// update the screen
 	PS3_DIAG_FRAME( "cl: before SCR_UpdateScreen" );
 	{
-		// Everything the renderer costs, INCLUDING the vsync flip wait that
-		// GL_SwapBuffers blocks in -- ps3gl reports that wait separately, so
-		// subtract it to get real render CPU. See public/ps3_diag.h.
+		// renderer cost INCLUDING the GL_SwapBuffers vsync wait; ps3gl reports that wait
+		// separately, so subtract it for real render CPU (see public/ps3_diag.h)
 		double ps3_t = PS3_PHASE_NOW();
 		SCR_UpdateScreen ();
 		PS3_PHASE_ADD( ps3_phase_render, ps3_t );
@@ -3890,11 +3537,6 @@ void Host_ClientFrame( void )
 
 //============================================================================
 
-/*
-====================
-CL_Init
-====================
-*/
 void CL_Init( void )
 {
 	string libpath;
@@ -3931,12 +3573,6 @@ void CL_Init( void )
 	cls.demonum = -1;
 }
 
-/*
-===============
-CL_Shutdown
-
-===============
-*/
 void CL_Shutdown( void )
 {
 	Con_Printf( "%s()\n", __func__ );

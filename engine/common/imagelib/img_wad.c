@@ -57,11 +57,6 @@ le_struct_begin( dlumpinfo_swap )
 	le_struct_field( dlumpinfo_t, size )
 le_struct_end();
 
-/*
-============
-Image_LoadPAL
-============
-*/
 qboolean Image_LoadPAL( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	int	rendermode = LUMP_NORMAL;
@@ -116,11 +111,6 @@ qboolean Image_LoadPAL( const char *name, const byte *buffer, fs_offset_t filesi
 	return true;
 }
 
-/*
-============
-Image_LoadFNT
-============
-*/
 qboolean Image_LoadFNT( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	qfont_t		font;
@@ -175,24 +165,13 @@ qboolean Image_LoadFNT( const char *name, const byte *buffer, fs_offset_t filesi
 	return Image_AddIndexedImageToPack( fin, image.width, image.height );
 }
 
-/*
-======================
-Image_SetMDLPointer
-
-Transfer buffer pointer before Image_LoadMDL
-======================
-*/
+// Transfer buffer pointer before Image_LoadMDL
 static void *g_mdltexdata;
 void Image_SetMDLPointer( byte *p )
 {
 	g_mdltexdata = p;
 }
 
-/*
-============
-Image_LoadMDL
-============
-*/
 qboolean Image_LoadMDL( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	mstudiotexture_t *pin = (mstudiotexture_t *)buffer;
@@ -233,11 +212,6 @@ qboolean Image_LoadMDL( const char *name, const byte *buffer, fs_offset_t filesi
 	return Image_AddIndexedImageToPack( fin, image.width, image.height );
 }
 
-/*
-============
-Image_LoadSPR
-============
-*/
 qboolean Image_LoadSPR( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	dspriteframe_t	pin;	// identical for q1\hl sprites
@@ -301,11 +275,6 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, fs_offset_t filesi
 	return Image_AddIndexedImageToPack( fin, image.width, image.height );
 }
 
-/*
-============
-Image_LoadLMP
-============
-*/
 qboolean Image_LoadLMP( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	lmp_t	lmp;
@@ -397,7 +366,9 @@ static int Image_FindBestBlack( const uint *pal )
 
 	for( int i = 0; i < 256; i++ )
 	{
-		int color = pal[i] & 0xFFFFFF;
+		// pal[i] & 0xFFFFFF keeps alpha instead of red on big-endian; read the bytes
+		const byte *rgba = (const byte *)&pal[i];
+		int color = rgba[0] | ( rgba[1] << 8 ) | ( rgba[2] << 16 );
 
 		if( color < min_color )
 		{
@@ -409,11 +380,6 @@ static int Image_FindBestBlack( const uint *pal )
 	return best_black;
 }
 
-/*
-=============
-Image_LoadMIP
-=============
-*/
 qboolean Image_LoadMIP( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	mip_t	mip;
@@ -469,9 +435,8 @@ qboolean Image_LoadMIP( const char *name, const byte *buffer, fs_offset_t filesi
 		}
 		else
 		{
-			// NOTE: we can have luma-pixels if quake1 texture
-			// converted into the hl texture but palette leave unchanged
-			// this is a good reason for using fullbright pixels
+			// a Q1 texture converted to HL with its palette unchanged can have luma pixels,
+			// a good reason to use fullbright pixels
 			const int pal_type = Image_ComparePalette( pal );
 
 			if( pal_type == PAL_QUAKE1 )
@@ -513,7 +478,8 @@ qboolean Image_LoadMIP( const char *name, const byte *buffer, fs_offset_t filesi
 		}
 
 		Image_GetPaletteLMP( pal, rendermode );
-		image.d_currentpal[255] &= 0xFFFFFF;
+		// index 255 is transparent; 0xFFFFFF cleared red instead of alpha on big-endian
+		image.d_currentpal[255] &= ~HostFourCC( 0, 0, 0, 0xFF );
 
 		if( rendermode == LUMP_TEXGAMMA && FBitSet( image.flags, IMAGE_HAS_LUMA ))
 		{
@@ -621,11 +587,6 @@ qboolean Image_LoadMIP( const char *name, const byte *buffer, fs_offset_t filesi
 	return Image_AddIndexedImageToPack( fin, image.width, image.height );
 }
 
-/*
-============
-Image_LoadWAD
-============
-*/
 qboolean Image_LoadWAD( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	dwadinfo_t whdr;
@@ -724,11 +685,6 @@ qboolean Image_LoadWAD( const char *name, const byte *buffer, fs_offset_t filesi
 	return false;
 }
 
-/*
-============
-Image_SaveWAD
-============
-*/
 qboolean Image_SaveWAD( const char *name, rgbdata_t *pix )
 {
 	byte        *mip1_data = NULL, *mip2_data = NULL, *mip3_data = NULL;

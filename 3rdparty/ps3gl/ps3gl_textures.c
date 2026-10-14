@@ -222,12 +222,15 @@ static int gl_format_is_bgr(GLenum format)
     return format == GL_BGR || format == GL_BGRA;
 }
 
-/* Alpha OR-mask for an internal format; RGB ones sample alpha as 1 in GL. 8-bit BMPs carry
- * palette alpha 0 (Decay's btns_main.bmp), so without this they draw invisible under SRC_ALPHA. */
+/* Alpha OR-mask for an internal format; RGB and luminance ones sample alpha as 1 in GL. 8-bit BMPs
+ * and HL mips (index 255) carry palette alpha 0, so without this they draw holes under SRC_ALPHA. */
 static uint32_t gl_internal_alpha_mask(GLint internalformat)
 {
     switch (internalformat) {
+    case 1:
     case 3:
+    case GL_LUMINANCE:
+    case GL_LUMINANCE8:
     case GL_RGB:
     case GL_RGB5:
     case GL_RGB8:

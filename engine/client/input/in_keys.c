@@ -34,12 +34,8 @@ typedef struct keyname_s
 	const char *binding; // default bind
 } keyname_t;
 
-// 512 is the maximum amount of scancodes supported by SDL2
-// but we don't use that much, only about 255 like Quake/HL, add 9 additional
-// keys for international keyboards, that gives us 264 keys total
-//
-// as no limit is imposed by client.dll API, this can be safely extended
-// if needed
+// ~255 keys like Quake/HL plus 9 international ones (SDL2 allows 512);
+// client.dll API imposes no limit, so this can be extended if needed
 static enginekey_t keys[265];
 
 static const keyname_t keynames[] =
@@ -116,10 +112,10 @@ static const keyname_t keynames[] =
 { "STICK1",         K_LSTICK,              "+speed"          },
 { "STICK2",         K_RSTICK,              "impulse 100"     }, // Flashlight
 { "L1_BUTTON",      K_L1_BUTTON,           "lastinv"         },
-{ "R1_BUTTON",      K_R1_BUTTON,           "invnext"         },
+{ "R1_BUTTON",      K_R1_BUTTON,           ""                }, // free: D-pad left/right cycle weapons
 { "DPAD_UP",        K_DPAD_UP,             "weapon_crowbar"  },
 { "DPAD_DOWN",      K_DPAD_DOWN,           "impulse 201"     }, // Spray
-{ "DPAD_LEFT",      K_DPAD_LEFT,           "lastinv"         },
+{ "DPAD_LEFT",      K_DPAD_LEFT,           "invprev"         },
 { "DPAD_RIGHT",     K_DPAD_RIGHT,          "invnext"         },
 { "L2_BUTTON",      K_L2_BUTTON,           "+speed"          },
 { "R2_BUTTON",      K_R2_BUTTON,           "+attack2"        },
@@ -159,13 +155,8 @@ static const keyname_t keynames[] =
 };
 
 #if XASH_PS3
-// DualShock/Sixaxis face-button names, used for anything shown to the player
-// (console listing, menu keybind UI). Key_KeynumToString prefers these, so they
-// are also what ends up written into config.cfg by Key_WriteBindings and what
-// the menu's rebind path feeds back into "bind" -- which means
-// Key_StringToKeynum MUST accept them too, or those binds fail to parse and
-// every pad button silently ends up unbound. The Xbox-style names in keynames[]
-// above stay valid on input as well, so older configs keep working.
+// DS3 names shown to the player and written to config.cfg, so Key_StringToKeynum must parse
+// them back or every pad bind is lost on reboot. keynames[] Xbox names stay valid on input.
 static const keyname_t ps3_display_names[] =
 {
 { "CROSS",     K_A_BUTTON,     "" },
@@ -185,11 +176,6 @@ static const keyname_t ps3_display_names[] =
 
 static CVAR_DEFINE_AUTO( key_rotate, "0", FCVAR_ARCHIVE|FCVAR_FILTERABLE, "rotate arrow keys (0-3)" );
 
-/*
-===================
-Key_IsDown
-===================
-*/
 int GAME_EXPORT Key_IsDown( int keynum )
 {
 	if( keynum == -1 )
@@ -197,19 +183,8 @@ int GAME_EXPORT Key_IsDown( int keynum )
 	return keys[keynum].down;
 }
 
-/*
-===================
-Key_StringToKeynum
-
-Returns a key number to be used to index keys[] by looking at
-the given string.  Single ascii characters return themselves, while
-the K_* names are matched up.
-
-0x11 will be interpreted as raw hex, which will allow new controlers
-
-to be configured even if they don't have defined names.
-===================
-*/
+// Single ascii chars return themselves, K_* names are matched up, and "0x11" is raw hex
+// so controllers without defined names can still be configured.
 static int Key_StringToKeynum( const char *str )
 {
 	if( !str || !str[0] )
@@ -237,10 +212,7 @@ static int Key_StringToKeynum( const char *str )
 	}
 
 #if XASH_PS3
-	// ps3_display_names[] is what Key_KeynumToString emits, so it has to parse
-	// back to the same keynum here -- otherwise the binds config.cfg writes out
-	// itself ("bind \"CROSS\" \"+jump\"") are rejected on the next boot, after
-	// unbindall has already cleared the defaults.
+	// config.cfg's own "bind \"CROSS\" ..." lines must parse, or they fail after its unbindall
 	for( int i = 0; i < ARRAYSIZE( ps3_display_names ); i++ )
 	{
 		if( !Q_stricmp( str, ps3_display_names[i].name ))
@@ -251,14 +223,7 @@ static int Key_StringToKeynum( const char *str )
 	return -1;
 }
 
-/*
-===================
-Key_KeynumToString
-
-Returns a string (either a single ascii char, a K_* name, or a 0x11 hex string) for the
-given keynum.
-===================
-*/
+// Returns a single ascii char, a K_* name, or a 0x11 hex string for the given keynum
 const char *Key_KeynumToString( int keynum )
 {
 	static char	tinystr[16];
@@ -296,11 +261,6 @@ const char *Key_KeynumToString( int keynum )
 	return tinystr;
 }
 
-/*
-===================
-Key_SetBinding
-===================
-*/
 void GAME_EXPORT Key_SetBinding( int keynum, const char *binding )
 {
 	if( keynum == -1 ) return;
@@ -317,11 +277,6 @@ void GAME_EXPORT Key_SetBinding( int keynum, const char *binding )
 }
 
 
-/*
-===================
-Key_GetBinding
-===================
-*/
 const char *Key_GetBinding( int keynum )
 {
 	if( keynum == -1 )
@@ -329,11 +284,6 @@ const char *Key_GetBinding( int keynum )
 	return keys[keynum].binding;
 }
 
-/*
-===================
-Key_GetKey
-===================
-*/
 static int Key_GetKey( const char *pBinding )
 {
 	if( !pBinding ) return -1;
@@ -357,12 +307,6 @@ static int Key_GetKey( const char *pBinding )
 	return -1;
 }
 
-/*
-=============
-Key_LookupBinding
-
-=============
-*/
 const char *Key_LookupBinding( const char *pBinding )
 {
 	int key = Key_GetKey( pBinding );
@@ -373,11 +317,6 @@ const char *Key_LookupBinding( const char *pBinding )
 	return Key_KeynumToString( key );
 }
 
-/*
-===================
-Key_Unbind_f
-===================
-*/
 static void Key_Unbind_f( void )
 {
 	if( Cmd_Argc() != 2 )
@@ -403,11 +342,6 @@ static void Key_Unbind_f( void )
 	Key_SetBinding( b, "" );
 }
 
-/*
-===================
-Key_Unbindall_f
-===================
-*/
 static void Key_Unbindall_f( void )
 {
 	for( int i = 0; i < ARRAYSIZE( keys ); i++ )
@@ -421,11 +355,6 @@ static void Key_Unbindall_f( void )
 	Key_SetBinding( K_START_BUTTON, "cancelselect" );
 }
 
-/*
-===================
-Key_Reset_f
-===================
-*/
 static void Key_Reset_f( void )
 {
 	// clear all keys first
@@ -440,11 +369,20 @@ static void Key_Reset_f( void )
 		Key_SetBinding( keynames[i].keynum, keynames[i].binding );
 }
 
-/*
-===================
-Key_Bind_f
-===================
-*/
+#if XASH_PS3
+// Controls > "Use defaults" runs unbindall, then binds kb_def.lst, which has no pad buttons
+static void Key_ResetPadKeys_f( void )
+{
+	for( int i = 0; i < ARRAYSIZE( keynames ); i++ )
+	{
+		if( keynames[i].keynum >= K_JOY1 && keynames[i].keynum <= K_AUX32 )
+			Key_SetBinding( keynames[i].keynum, keynames[i].binding );
+	}
+
+	PS3_ApplyModPadBinds();
+}
+#endif
+
 static void Key_Bind_f( void )
 {
 	int c = Cmd_Argc();
@@ -484,13 +422,7 @@ static void Key_Bind_f( void )
 	Key_SetBinding( b, cmd );
 }
 
-/*
-============
-Key_WriteBindings
-
-Writes lines containing "bind key value"
-============
-*/
+// Writes lines containing "bind key value"
 void Key_WriteBindings( file_t *f )
 {
 	if( !f ) return;
@@ -505,20 +437,12 @@ void Key_WriteBindings( file_t *f )
 		string newCommand;
 		Cmd_Escape( newCommand, keys[i].binding, sizeof( newCommand ));
 
-		// NOTE: as TheKingFireS figured out, some particular mods (like CoF) do not
-		// use LookupBinding to find key by it's binding and instead parse config.cfg
-		// to look for bind commands.
-		// CoF expects key to be enclosed in double quotes
+		// some mods (like CoF) parse config.cfg for bind commands instead of using
+		// LookupBinding, and CoF expects the key in double quotes (found by TheKingFireS)
 		FS_Printf( f, "bind \"%s\" \"%s\"\n", Key_KeynumToString( i ), newCommand );
 	}
 }
 
-/*
-============
-Key_Bindlist_f
-
-============
-*/
 static void Key_Bindlist_f( void )
 {
 	for( int i = 0; i < ARRAYSIZE( keys ); i++ )
@@ -530,13 +454,7 @@ static void Key_Bindlist_f( void )
 	}
 }
 
-/*
-=====================================
-Cmd_GetKeysList
-
-Autocomplete for bind command
-=====================================
-*/
+// Autocomplete for bind command
 qboolean Cmd_GetKeysList( const char *s, char *completedname, int length, qboolean print_suggestions )
 {
 	size_t i, numkeys;
@@ -582,18 +500,7 @@ qboolean Cmd_GetKeysList( const char *s, char *completedname, int length, qboole
 	return true;
 }
 
-/*
-==============================================================================
-
-			LINE TYPING INTO THE CONSOLE
-
-==============================================================================
-*/
-/*
-===================
-Key_Init
-===================
-*/
+// LINE TYPING INTO THE CONSOLE
 void Key_Init( void )
 {
 	// register our functions
@@ -601,6 +508,9 @@ void Key_Init( void )
 	Cmd_AddRestrictedCommand( "unbind", Key_Unbind_f, "removes a command on the specified key in bindmap" );
 	Cmd_AddRestrictedCommand( "unbindall", Key_Unbindall_f, "removes all commands from all keys in bindmap" );
 	Cmd_AddRestrictedCommand( "resetkeys", Key_Reset_f, "reset all keys to their default values" );
+#if XASH_PS3
+	Cmd_AddRestrictedCommand( "resetpadkeys", Key_ResetPadKeys_f, "reset gamepad buttons to their default values" );
+#endif
 	Cmd_AddCommand( "bindlist", Key_Bindlist_f, "display current key bindings" );
 	Cmd_AddCommand( "makehelp", Key_EnumCmds_f, "write help.txt that contains all console cvars and cmds" );
 
@@ -612,11 +522,6 @@ void Key_Init( void )
 
 }
 
-/*
-===================
-Key_AddKeyCommands
-===================
-*/
 static void Key_AddKeyCommands( int key, const char *kb, qboolean down )
 {
 	if( !kb ) return;
@@ -655,13 +560,7 @@ static void Key_AddKeyCommands( int key, const char *kb, qboolean down )
 	}
 }
 
-/*
-===================
-Key_IsAllowedAutoRepeat
-
-List of keys that allows auto-repeat
-===================
-*/
+// List of keys that allows auto-repeat
 static qboolean Key_IsAllowedAutoRepeat( int key )
 {
 	if( cls.key_dest != key_game )
@@ -723,13 +622,7 @@ static int Key_Rotate( int key )
 }
 
 
-/*
-===================
-Key_Event
-
-Called by the system for both key up and key down events
-===================
-*/
+// Called by the system for both key up and key down events
 void GAME_EXPORT Key_Event( int key, int down )
 {
 	key = Key_Rotate( key );
@@ -744,16 +637,8 @@ void GAME_EXPORT Key_Event( int key, int down )
 	const char *kb = keys[key].binding;
 	keys[key].down = down ? true : false;
 
-	// Abort the startup videos explicitly rather than leaving it to the
-	// ESCAPE -> client.dll -> UI_IsVisible chain SCR_RunCinematic relies on:
-	// that chain needs a keyboard, and on a console there isn't one, which
-	// leaves the intro unskippable by any input at all. START already carries
-	// the same "cancelselect" binding as ESCAPE in the default binding table
-	// above, so accept either. Clearing movienum first ends the whole playlist
-	// instead of stepping to the next file -- dropping to the menu is the point
-	// of skipping -- and routing through SCR_NextMovie() reuses the exact path
-	// a naturally-finished playlist takes, so the rest of the boot sequence
-	// (startup demos included) continues identically.
+	// skip the intro on ESCAPE or START (the ESCAPE->client.dll chain needs a keyboard); movienum -1
+	// ends the whole playlist, and SCR_NextMovie() continues boot like a finished playlist
 	if( down && cls.state == ca_cinematic && ( key == K_ESCAPE || key == K_START_BUTTON ))
 	{
 		cls.movienum = -1;
@@ -868,10 +753,8 @@ void GAME_EXPORT Key_Event( int key, int down )
 		return;
 	}
 
-	// key up events only perform actions if the game key binding is
-	// a button command (leading + sign).  These will be processed even in
-	// console mode and menu mode, to keep the character from continuing
-	// an action started before a mode switch.
+	// key up only acts on button commands (leading +), even in console and menu mode,
+	// so an action started before a mode switch does not keep going
 	if( !down )
 	{
 		Key_AddKeyCommands( key, kb, down );
@@ -893,12 +776,6 @@ void GAME_EXPORT Key_Event( int key, int down )
 	}
 }
 
-/*
-================
-Key_EnableTextInput
-
-================
-*/
 void Key_EnableTextInput( qboolean enable, qboolean force )
 {
 	if( osk_enable.value )
@@ -914,11 +791,6 @@ void Key_EnableTextInput( qboolean enable, qboolean force )
 	host.textmode = enable;
 }
 
-/*
-=========
-Key_SetKeyDest
-=========
-*/
 void GAME_EXPORT Key_SetKeyDest( int key_dest )
 {
 	IN_ToggleClientMouse( key_dest, cls.key_dest );
@@ -935,10 +807,8 @@ void GAME_EXPORT Key_SetKeyDest( int key_dest )
 		break;
 	case key_console:
 #if !XASH_NSWITCH && !XASH_PSVITA && !XASH_PS3 // if we don't disable this, pops up the keyboard during load
-		// PS3: CL_Connect_f switches to key_console during map load/connect,
-		// which popped the Sony OSK over the loading screen. Opening the
-		// console by hand asks for text input explicitly instead -- see
-		// Con_ToggleConsole_f, and K_Y_BUTTON in Key_Console.
+		// PS3: map load/connect sets key_console, so the OSK opened over the loading screen; a manual
+		// console open asks for text input itself (Con_ToggleConsole_f, K_Y_BUTTON in Key_Console)
 		Key_EnableTextInput( true, false );
 #endif
 		cls.key_dest = key_console;
@@ -953,11 +823,6 @@ void GAME_EXPORT Key_SetKeyDest( int key_dest )
 	}
 }
 
-/*
-===================
-Key_ClearStates
-===================
-*/
 void GAME_EXPORT Key_ClearStates( void )
 {
 	// don't clear keys during changelevel
@@ -980,13 +845,7 @@ void GAME_EXPORT Key_ClearStates( void )
 		clgame.dllFuncs.IN_ClearStates();
 }
 
-/*
-===================
-CL_CharEvent
-
-Normal keyboard characters, already shifted / capslocked / etc
-===================
-*/
+// Normal keyboard characters, already shifted / capslocked / etc
 void CL_CharEvent( int key )
 {
 	// the console key should never be used as a char
@@ -1009,13 +868,7 @@ void CL_CharEvent( int key )
 	}
 }
 
-/*
-============
-Key_ToUpper
-
-A helper function if platform input doesn't support text mode properly
-============
-*/
+// A helper function if platform input doesn't support text mode properly
 int Key_ToUpper( int keynum )
 {
 	if( keynum == '-' )

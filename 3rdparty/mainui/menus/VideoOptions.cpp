@@ -23,6 +23,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "PicButton.h"
 #include "Slider.h"
 #include "CheckBox.h"
+#include "SpinControl.h"
+#include "StringArrayModel.h"
 #include "YesNoMessageBox.h"
 
 #define ART_BANNER	  	"gfx/shell/head_vidoptions"
@@ -38,10 +40,13 @@ private:
 	void Reload() override;
 
 public:
-	CMenuVidOptions() : CMenuFramework( "CMenuVidOptions" ) { }
+	CMenuVidOptions() : CMenuFramework( "CMenuVidOptions" ), loadingScales( false ), hudScaleNoted( false ) { }
 	void SaveAndPopMenu() override;
 	void UpdateConfig();
 	void GetConfig();
+	void GetScales();
+	void HudScaleChanged();
+	void CrosshairScaleChanged();
 
 	int		outlineWidth;
 
@@ -62,17 +67,14 @@ public:
 	CMenuCheckBox	overbright;
 	CMenuCheckBox	filtering;
 	CMenuCheckBox	detailtex;
-	CMenuCheckBox	hudscale;
-	CMenuYesNoMessageBox	msgBox;
+	CMenuSpinControl	hudscale;
+	CMenuSpinControl	crosshairScale;
 
 	HIMAGE		hTestImage;
+	bool		loadingScales;
+	bool		hudScaleNoted;
 };
 
-/*
-=================
-CMenuVidOptions::UpdateConfig
-=================
-*/
 void CMenuVidOptions::UpdateConfig( void )
 {
 	float val1 = RemapVal( gammaIntensity.GetCurrentValue(), 0.0, 1.0, 1.8, 3.0 );
@@ -95,6 +97,48 @@ void CMenuVidOptions::GetConfig( void )
 	brightness.SetOriginalValue( val2 );
 }
 
+static const char *hudScaleNames[] = { "Off", "1.25x", "1.5x", "2x" };
+static const float hudScaleValues[] = { 0.0f, 1.25f, 1.5f, 2.0f };
+static const char *crosshairScaleNames[] = { "1x", "1.5x", "2x" };
+static const float crosshairScaleValues[] = { 1.0f, 1.5f, 2.0f };
+
+void CMenuVidOptions::GetScales( void )
+{
+	float hud = EngFuncs::GetCvarFloat( "hud_scale" );
+	float crosshair = EngFuncs::GetCvarFloat( "crosshair_scale" );
+
+	// hud_scale >= 320 is a target width (the old checkbox wrote 1024), below that a factor
+	if( hud >= 320.0f )
+		hud = ScreenWidth / hud;
+
+	loadingScales = true;
+	hudscale.SetCurrentValue( (float)( hud < 1.125f ? 0 : hud < 1.375f ? 1 : hud < 1.75f ? 2 : 3 ));
+	crosshairScale.SetCurrentValue( (float)( crosshair < 1.25f ? 0 : crosshair < 1.75f ? 1 : 2 ));
+	loadingScales = false;
+	hudScaleNoted = false;
+}
+
+void CMenuVidOptions::HudScaleChanged( void )
+{
+	if( loadingScales )
+		return;
+
+	EngFuncs::CvarSetValue( "hud_scale", hudScaleValues[(int)hudscale.GetCurrentValue()] );
+
+	// clients without per-frame screen info (HL, BS, OpFor, CS) lay out the HUD at map load
+	if( EngFuncs::ClientInGame() && !hudScaleNoted )
+	{
+		hudScaleNoted = true;
+		UI_ShowMessageBox( L( "If the HUD does not change at once, the new scale applies at the next map or save load." ));
+	}
+}
+
+void CMenuVidOptions::CrosshairScaleChanged( void )
+{
+	if( !loadingScales )
+		EngFuncs::CvarSetValue( "crosshair_scale", crosshairScaleValues[(int)crosshairScale.GetCurrentValue()] );
+}
+
 void CMenuVidOptions::SaveAndPopMenu( void )
 {
 #if LEGACY_VIEWSIZE
@@ -105,17 +149,11 @@ void CMenuVidOptions::SaveAndPopMenu( void )
 	swwater.WriteCvar();
 	overbright.WriteCvar();
 	filtering.WriteCvar();
-	hudscale.WriteCvar();
 	// gamma and brightness is already written
 
 	CMenuFramework::SaveAndPopMenu();
 }
 
-/*
-=================
-CMenuVidOptions::Ownerdraw
-=================
-*/
 void CMenuVidOptions::CMenuVidPreview::Draw( )
 {
 	int		color = 0xFFFF0000; // 255, 0, 0, 255
@@ -154,11 +192,6 @@ void CMenuVidOptions::CMenuVidPreview::Draw( )
 	UI_DrawRectangleExt( m_scPos, m_scSize, color, ((CMenuVidOptions*)Parent())->outlineWidth );
 }
 
-/*
-=================
-CMenuVidOptions::Init
-=================
-*/
 void CMenuVidOptions::_Init( void )
 {
 	hTestImage = EngFuncs::PIC_Load( ART_GAMMA, PIC_KEEP_SOURCE | PIC_EXPAND_SOURCE );
@@ -220,55 +253,18 @@ void CMenuVidOptions::_Init( void )
 	filtering.SetCoord( 72, height );
 	height += 50;
 
-	hudscale.szName = L( "Auto scale HUD" );
-	hudscale.SetCoord( 72, height );
-	height += 50;
+	// under the test image: the left column has no room for the name line a spin draws above itself
+	static CStringArrayModel hudScaleModel( hudScaleNames, V_ARRAYSIZE( hudScaleNames ));
+	hudscale.szName = L( "HUD scale" );
+	hudscale.Setup( &hudScaleModel );
+	hudscale.onChanged = VoidCb( &CMenuVidOptions::HudScaleChanged );
+	hudscale.SetRect( 390, 720, 220, 32 );
 
-	msgBox.SetMessage( L( "^1WARNING: This is an experimental option and turning it on might break mods!^7\n\nReload the game or reconnect to the server to apply the settings."));
-	msgBox.onNegative.pExtra = &hudscale;
-	SET_EVENT_MULTI( msgBox.onNegative,
-	{
-		CMenuCheckBox *cb = (CMenuCheckBox *)pExtra;
-
-		cb->bChecked = false;
-		cb->SetCvarValue( 0.0f );
-	});
-
-	SET_EVENT_MULTI( hudscale.onChanged,
-	{
-		CMenuVidOptions *parent = (CMenuVidOptions *)pSelf->Parent();
-
-		if( EngFuncs::ClientInGame( ))
-		{
-			// bring up warning message box
-			// FIXME: try to save the game, apply the settings, and then load it back. This will be useful when changing resolution too.
-			parent->msgBox.Show();
-		}
-	});
-
-	SET_EVENT_MULTI( hudscale.onCvarWrite,
-	{
-		CMenuCheckBox *cb = (CMenuCheckBox *)pSelf;
-
-		if( cb->bChecked )
-		{
-			// automatically scale HUD as if we have 1024x768 screen
-			// (saving aspect ratio)
-			// FIXME: allow configuring this value?
-			EngFuncs::CvarSetValue( cb->CvarName(), 1024.0f );
-		}
-		else
-		{
-			EngFuncs::CvarSetValue( cb->CvarName(), 0.0f );
-		}
-	});
-
-	SET_EVENT_MULTI( hudscale.onCvarGet,
-	{
-		CMenuCheckBox *cb = (CMenuCheckBox *)pSelf;
-
-		cb->bChecked = EngFuncs::GetCvarFloat( cb->CvarName() ) >= 640.0f;
-	});
+	static CStringArrayModel crosshairScaleModel( crosshairScaleNames, V_ARRAYSIZE( crosshairScaleNames ));
+	crosshairScale.szName = L( "Crosshair size" );
+	crosshairScale.Setup( &crosshairScaleModel );
+	crosshairScale.onChanged = VoidCb( &CMenuVidOptions::CrosshairScaleChanged );
+	crosshairScale.SetRect( 650, 720, 220, 32 );
 
 	AddItem( banner );
 	AddItem( done );
@@ -283,6 +279,7 @@ void CMenuVidOptions::_Init( void )
 	AddItem( overbright );
 	AddItem( filtering );
 	AddItem( hudscale );
+	AddItem( crosshairScale );
 	AddItem( testImage );
 
 #if LEGACY_VIEWSIZE
@@ -297,7 +294,6 @@ void CMenuVidOptions::_Init( void )
 	vbo.LinkCvar( "gl_vbo" );
 	overbright.LinkCvar( "gl_overbright" );
 	// skip filtering.LinkCvar, different names in ref_gl and ref_soft
-	hudscale.LinkCvar( "hud_scale" );
 }
 
 void CMenuVidOptions::_VidInit()
@@ -381,6 +377,7 @@ void CMenuVidOptions::Reload()
 	}
 
 	CMenuFramework::Reload();
+	GetScales();
 }
 
 ADD_MENU( menu_vidoptions, CMenuVidOptions, UI_VidOptions_Menu );

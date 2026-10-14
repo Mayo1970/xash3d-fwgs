@@ -61,6 +61,7 @@ private:
 	void _Init() override;
 	void _VidInit() override;
 	void GetConfig();
+	void VibrateChanged();
 	void SaveAndPopMenu() override;
 
 	CMenuSlider side, forward, pitch, yaw;
@@ -71,19 +72,24 @@ private:
 	CMenuAction axisBind_label;
 
 	CMenuCheckBox enableOsk;
+
+	CMenuCheckBox vibrationEnable;
+	CMenuSlider vibration;
+	float oldVibrate;
 };
 
-/*
-=================
-CMenuGamePad::GetConfig
-=================
-*/
 void CMenuGamePad::GetConfig( void )
 {
 	float _side, _forward, _pitch, _yaw;
 	char binding[7] = { 0 };
 
 	enableOsk.LinkCvar( "osk_enable" );
+	vibrationEnable.LinkCvar( "vibration_enable" );
+	vibration.LinkCvar( "vibration_length" );
+
+	if( !vibrationEnable.bChecked )
+		vibration.SetGrayed( true );
+	oldVibrate = vibration.GetCurrentValue();
 
 	Q_strncpy( binding, EngFuncs::GetCvarString( "joy_axis_binding"), sizeof( binding ));
 
@@ -138,11 +144,18 @@ void CMenuGamePad::GetConfig( void )
 	}
 }
 
-/*
-=================
-CMenuGamePad::SetConfig
-=================
-*/
+void CMenuGamePad::VibrateChanged()
+{
+	float newVibrate = vibration.GetCurrentValue();
+	if( oldVibrate != newVibrate )
+	{
+		// vibrate takes ms, scaled by vibration_length: test with a 25-damage hit (100 ms)
+		EngFuncs::ClientCmd( FALSE, "vibrate 100" );
+		vibration.WriteCvar();
+		oldVibrate = newVibrate;
+	}
+}
+
 void CMenuGamePad::SaveAndPopMenu()
 {
 	float _side, _forward, _pitch, _yaw;
@@ -185,15 +198,12 @@ void CMenuGamePad::SaveAndPopMenu()
 	EngFuncs::CvarSetString( "joy_axis_binding", binding );
 
 	enableOsk.WriteCvar();
+	vibrationEnable.WriteCvar();
+	vibration.WriteCvar();
 
 	CMenuFramework::SaveAndPopMenu();
 }
 
-/*
-=================
-CMenuGamePad::Init
-=================
-*/
 void CMenuGamePad::_Init( void )
 {
 	int i, y;
@@ -231,6 +241,16 @@ void CMenuGamePad::_Init( void )
 	yaw.SetNameAndStatus( L( "Look Y" ), L( "Vertical look sensitivity" ) );
 	invYaw.SetNameAndStatus( L( "Invert" ), L( "Invert yaw axis" ) );
 
+	vibrationEnable.szName = L( "Enable vibration" );
+	vibrationEnable.iMask = (QMF_GRAYED|QMF_INACTIVE);
+	vibrationEnable.bInvertMask = true;
+	vibrationEnable.onChanged = CMenuCheckBox::BitMaskCb;
+	vibrationEnable.onChanged.pExtra = &vibration.iFlags;
+
+	vibration.szName = L( "Vibration" );
+	vibration.Setup( 0.0f, 5.0f, 0.05f );
+	vibration.onChanged = VoidCb( &CMenuGamePad::VibrateChanged );
+
 	AddItem( banner );
 	AddButton( L( "Controls" ), nullptr, PC_CONTROLS, UI_Controls_Menu );
 	AddButton( L( "Done" ), nullptr, PC_DONE, VoidCb( &CMenuGamePad::SaveAndPopMenu ) );	// Обе строки уже встречались ранее !!
@@ -245,6 +265,8 @@ void CMenuGamePad::_Init( void )
 	AddItem( invPitch );
 	AddItem( yaw );
 	AddItem( invYaw );
+	AddItem( vibrationEnable );
+	AddItem( vibration );
 	AddItem( axisBind_label );
 }
 
@@ -279,6 +301,11 @@ void CMenuGamePad::_VidInit()
 	yaw.SetCoord( 630, 430 + sliderAlign );
 	yaw.SetCharSize( QM_SMALLFONT );
 	invYaw.SetCoord( 850, 430 );
+
+	vibrationEnable.SetCoord( 630, 480 );
+
+	vibration.SetCoord( 630, 530 + sliderAlign );
+	vibration.SetCharSize( QM_SMALLFONT );
 
 	GetConfig();
 }
