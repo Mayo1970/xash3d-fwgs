@@ -13,7 +13,7 @@
 
 ### Xcode ###
 build/
-build_tfc
+build_*
 *.pbxuser
 !default.pbxuser
 *.mode1v3
@@ -365,9 +365,6 @@ cmake-build-*
 
 # Some stuff of mine
 scripts/
-
-# Not ready yet
-ricochet/
 
 # AI-related stuff
 CLAUDE.md
